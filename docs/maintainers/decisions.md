@@ -81,8 +81,6 @@ Policy and the end-of-life table: `CONTRIBUTING.md`, section "Supported Python v
   this. The `pip` entry is weekly with `versioning-strategy: increase-if-necessary`, so a floor is raised only when
   the new version needs it. Before approving one, read it and check `template (3.12)` and the package's
   `Requires-Python`.
-- **Migrations** (`migrations/*.py`) keep Python 3.9-compatible grammar: they run on the user's interpreter during
-  `copier update`, which can be older than the floor.
 
 ## Releases
 - Tags are annotated `vX.Y.Z`, made on the merge commit after the PRs to ship have merged. Steps: runbook.
