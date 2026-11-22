@@ -1,0 +1,30 @@
+# Role-Oriented-Agent-Template
+
+A Copier template for agent-ready repositories (one human, several AI agents). This file is for agents working on the template itself. It is not copied into generated projects: Copier copies only `template/`, and a generated project's own root file comes from `template/AGENTS.md.jinja`.
+
+The human owner decides. Agents propose in pull requests.
+
+## Commands
+- Set up: `python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements-dev.txt`
+- Test everything before opening a PR: `python -m pytest tests -q`. It takes about two minutes and runs in parallel (`pytest.ini`): it generates real projects and runs each one's `check.py --strict`, the shipped unit tests once, and a `copier update`.
+- Try the template by hand: `copier copy --trust --vcs-ref HEAD . <dir>`. Always pass `--vcs-ref HEAD`: without it Copier builds from the latest release tag, so you would test the tag, not your branch.
+
+## Where things are
+- `template/`: everything generated into projects. Nested rules load when you work there: `template/agents/AGENTS.md`, `template/tools/AGENTS.md`, `template/docs/AGENTS.md`, `template/work/AGENTS.md`.
+- `copier.yml`: questions, exclusions, post-generation tasks. `tests/`: template-level tests. `.github/`: this repo's own CI, not copied.
+- Why it is built this way: the ADRs in `docs/decisions/` and `README.md`.
+- Maintainer notes (standing rules and decisions, how to review, merge and release): `docs/maintainers/decisions.md` and `docs/maintainers/runbook.md`. Not copied into generated projects.
+
+## Hard rules
+1. Never push to `main`, never force-push. Merge a PR only when the owner's in-person approving review covers its latest commit and all required checks are green, using a merge commit pinned to the reviewed head (no squash, no rebase). An unattended session never approves. The delegated merge rule, including the merge guard, is [ADR 0011](docs/decisions/0011-delegate-merges-under-a-guard.md); when it does not apply, leave the merge to the owner.
+2. One topic per PR, branched from `main`, not stacked. The description lists what changed, the evidence (commands and results) and the decisions only the owner can make.
+3. Changes to the agent harness need the owner's explicit approval: `template/agents/`, `template/AGENTS.md.jinja`, this file, `CLAUDE.md`, `.github/CODEOWNERS`, `.github/scripts/merge_guarded.sh`, `.github/workflows/` (all workflows) and `.github/dependabot.yml`.
+   - Approval is as defined in rule 1. `.github/CODEOWNERS` names the accounts that satisfy Code Owner review, and the ruleset `protect-main` requires it on every PR to `main`.
+   - Only the owner approves; who the owner is, and which sessions are attended, is in the organization context (`The-Urcydo/.github/AGENTS.md`), not in account names here.
+   - A push after the approval makes it stale: say so on the PR before you push to an approved PR.
+4. Any other PR gets an independent review first: a reviewer that did not write it runs the tests and checks the PR against its description. Then the owner approves it (rule 1) and it can be merged.
+5. Everything under `template/` ships to every generated project: keep this repo's own notes out of it. This repo's ADRs live in `docs/decisions/` and never ship: take the next number from `main` and check open PRs for the same number first.
+6. New workflows set `permissions` and pin actions to commit SHAs.
+
+## Gotchas
+- Do not trust a check that ends in a counting pipe (`grep -c`, `wc -l`): if the first command fails it still prints 0. Use a command with an exit code.

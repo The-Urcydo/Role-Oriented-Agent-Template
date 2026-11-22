@@ -1,0 +1,53 @@
+# OS / editor
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Python (tools/ and tests)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets and local config: never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Personal agent instructions (local only)
+CLAUDE.local.md
+AGENTS.local.md
+AGENTS.override.md
+
+# Coordination locks and per-item scratch space
+work/.locks/
+work/items/*/scratch/
+
+# Data and notebooks (data-ml layout): keep raw and large artifacts out of git
+data/raw/
+data/external/
+data/interim/
+.ipynb_checkpoints/
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.joblib
+mlruns/
+wandb/
+
+# Dependencies and build output (adjust for your stack)
+node_modules/
+dist/
+build/
+target/
+coverage/

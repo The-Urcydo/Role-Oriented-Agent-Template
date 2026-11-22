@@ -1,0 +1,82 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: nothing in this workflow writes to the repo.
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels its older run. Runs on main always finish.
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  template:
+    name: template (${{ matrix.python-version }})
+    runs-on: ubuntu-26.04
+    # A hung test must not burn the runner for the six-hour default.
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            copier-version: latest
+            experimental: false
+          # The lowest directly supported Copier comes from requirements-dev.txt, not a hard-coded pin here.
+          # It shares the job name with the latest leg so ci-gate and the ruleset need no change.
+          - python-version: "3.12"
+            copier-version: floor
+            experimental: false
+          - python-version: "3.14"
+            copier-version: latest
+            experimental: false
+          # Informational until it has been green for two weeks; continue-on-error keeps a failure out of ci-gate.
+          - python-version: "3.15"
+            copier-version: latest
+            experimental: true
+    steps:
+      # Actions are pinned to full commit SHAs (a tag can be moved). Dependabot keeps them current.
+      # Node 24-native majors: GitHub removed Node 20 from runners on 2026-09-23.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history and every tag: the upgrade test generates a project at the previous release tag
+          # (git archive v0.2.0) and updates it. A shallow clone has no tag, so that test would skip.
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install dev requirements
+        env:
+          COPIER_VERSION: ${{ matrix.copier-version }}
+        run: |
+          if [ "$COPIER_VERSION" = "floor" ]; then
+            floor=$(python -c 'import re; print(re.search(r"^copier>=([0-9.]+)", open("requirements-dev.txt").read(), re.M).group(1))')
+            grep -v '^copier' requirements-dev.txt > "$RUNNER_TEMP/requirements-floor.txt"
+            python -m pip install -r "$RUNNER_TEMP/requirements-floor.txt" "copier==$floor"
+          else
+            python -m pip install -r requirements-dev.txt
+          fi
+      # --durations makes the slowest tests visible in the log, so a regression is easy to spot.
+      - run: python -m pytest tests -q --durations=20
+
+  # One stable check for the ruleset to require: it changes only when this job does, not when the matrix does.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [template]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Every matrix job must succeed
+        env:
+          RESULT: ${{ needs.template.result }}
+        run: test "$RESULT" = "success"
