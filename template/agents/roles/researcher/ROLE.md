@@ -4,9 +4,9 @@ mission: Find and verify what a decision or plan depends on, and report it with 
 reads: [AGENTS.md, docs/INDEX.md, work/research/, "work/items/<id>/"]
 skills: [research-question]
 item_files: [research.md]
+writes_files: []
 access: read-only
 use_when: a planner or architect needs a question answered with sources before they plan or decide
-writes_files: []
 never: [present an unverified claim as fact, write product code, edit docs outside work/research/, decide for the human, move an item or change its owner with transition.py]
 done_when: research.md answers the question asked, every claim has a source or is marked as an assumption, and gaps are listed
 escalate_when: the sources disagree on something that changes the decision, or the answer needs access you do not have
@@ -21,7 +21,7 @@ The planner or architect asks you a question and keeps the item: its status, own
 
 ## Procedure
 
-Do the research itself with the `research-question` skill (`agents/skills/research-question/SKILL.md`): the question, what the repo already says, the sources, the answer first, and the notes. Read it before you start. This charter holds what the skill leaves out: how you are called, what you reply with, and the quality bar.
+Do the research itself with the `research-question` skill: the question, what the repo already says, the sources, the answer first, and the notes. Read it before you start. This charter holds what the skill leaves out: how you are called, what you reply with, and the quality bar.
 
 ## Hand back
 

@@ -413,10 +413,10 @@ class HealthTests(RepoTestCase):
     def test_skill_metadata_keys_and_values_are_checked(self) -> None:
         p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
         original = p.read_text()
-        p.write_text(original.replace("\n---\n", "\nmetadata:\n  requires: anything-else\n---\n", 1))
+        p.write_text(original.replace("metadata:\n  requires: work-tracker\n", "metadata:\n  requires: anything-else\n", 1))
         out = self.fails("check")
         self.assertIn("metadata.requires 'anything-else' is not allowed", out)
-        p.write_text(original.replace("\n---\n", "\nmetadata:\n  bogus: x\n---\n", 1))
+        p.write_text(original.replace("metadata:\n  requires: work-tracker\n", "metadata:\n  bogus: x\n", 1))
         self.assertIn("metadata key 'bogus' is not allowed", self.fails("check"))
 
     def test_non_map_skill_metadata_is_reported_and_never_crashes(self) -> None:
@@ -424,7 +424,7 @@ class HealthTests(RepoTestCase):
         original = p.read_text()
         for shape in ("metadata:", "metadata: user", "metadata: []"):
             with self.subTest(shape=shape):
-                p.write_text(original.replace("\n---\n", f"\n{shape}\n---\n", 1), encoding="utf-8")
+                p.write_text(original.replace("metadata:\n  requires: work-tracker\n", f"{shape}\n", 1), encoding="utf-8")
                 out = self.fails("check")
                 self.assertIn("metadata must hold indented `key: value` lines", out)
                 self.assertNotIn("Traceback", out)
@@ -1604,7 +1604,7 @@ class AdapterTests(RepoTestCase):
         # Claude Code does not preload a user-invoked skill; its generated copy gets the adapter flag.
         self.set_claude()
         p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
-        p.write_text(p.read_text().replace("\n---\n", "\nmetadata:\n  invocation: user\n---\n", 1))
+        p.write_text(p.read_text().replace("metadata:\n  requires: work-tracker\n", "metadata:\n  invocation: user\n  requires: work-tracker\n", 1))
         self.ok("sync_agents")
         self.assertNotIn("skills:", self.claude_head("reviewer"))
         generated = (self.repo / ".claude" / "skills" / "review-work" / "SKILL.md").read_text()
