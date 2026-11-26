@@ -1,5 +1,5 @@
 ---
-name: review-change
+name: review-security
 description: Reviews a change for security and privacy risk and writes security-review.md with findings ranked by severity. Use when acting as the security role, or when asked for a security review of a diff or work item.
 ---
 # Review a change

@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -208,7 +209,7 @@ class EvalHarnessTests(RepoTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             sandbox, meta = self._skill_sandbox(tmp)
             eval_harness.run_reference_solution(sandbox, "role-skill-discovery", meta)
-            skill = sandbox / "agents" / "roles" / "reviewer" / "skills" / "verify-work" / "SKILL.md"
+            skill = sandbox / "agents" / "skills" / "review-work" / "SKILL.md"
             with open(skill, "a", encoding="utf-8") as fh:
                 fh.write("\nAn unrelated edit.\n")
             eval_harness.sync_agents.sync(sandbox)
@@ -222,14 +223,15 @@ class EvalHarnessTests(RepoTestCase):
             self.skipTest("evals module not installed")
         with tempfile.TemporaryDirectory() as tmp:
             sandbox, meta = self._skill_sandbox(tmp)
-            skills = sandbox / "agents" / "roles" / "reviewer" / "skills"
-            shutil.rmtree(skills / "verify-work")
-            (skills / ".gitkeep").write_text("", encoding="utf-8")  # a valid bundle with no skill in it
+            skills = sandbox / "agents" / "skills"
+            shutil.rmtree(skills / "review-work")
+            charter = sandbox / "agents" / "roles" / "reviewer" / "ROLE.md"
+            charter.write_text(re.sub(r"(?m)^skills: .*$", "skills: []", charter.read_text()))
             eval_harness.sync_indexes.write_outputs(sandbox)
             eval_harness.sync_agents.sync(sandbox)
             passed, reason = eval_harness.grade_task(sandbox, "role-skill-discovery", meta)
         self.assertFalse(passed)
-        self.assertIn("verify-work", reason)
+        self.assertIn("review-work", reason)
 
     def _solved_skill_sandbox(self, tmp: str):
         """A sandbox where the reference solution has run and passes, so the edit a test then makes is the only

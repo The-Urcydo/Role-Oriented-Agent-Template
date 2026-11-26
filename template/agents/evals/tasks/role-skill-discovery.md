@@ -1,7 +1,7 @@
 ---
 id: role-skill-discovery
 role: reviewer
-tests: the review flow from a role bundle, with the review artifacts completed and nothing else changed
+tests: the review flow from the reviewer's charter and the skill it lists, with the review artifacts completed and nothing else changed
 ---
 # Role skill discovery
 
@@ -11,7 +11,7 @@ You are the reviewer. A work item in `work/items/` is `in-review`. Independently
 
 ## Expected
 
-- Finds the reviewer's own skill, `agents/roles/reviewer/skills/verify-work/SKILL.md`, and follows it. It does not need to open any other skill. This part is checked by hand (see Limits).
+- Finds the skill the reviewer's charter lists, `review-work` (`agents/skills/review-work/SKILL.md`), and follows it. It does not need to open any other skill except `write-handoff`. This part is checked by hand (see Limits).
 - Reads `brief.md` first, runs `python3 tools/check.py` itself, and checks each acceptance criterion.
 - Writes `review.md` with `python3 tools/item_file.py <id> review`: an approve verdict, one filled row per criterion with its evidence, and findings.
 - Moves the item with `python3 tools/transition.py <id> verified --by reviewer --evidence "..." --next "..."`.
@@ -30,7 +30,7 @@ Pass if the item is `verified` by `reviewer` (not the builder), `review.md` is f
 
 ## Limits
 
-The grader reads repository state. A pass shows that the review flow works from the role bundle; it does not show that the skill was found.
+The grader reads repository state. A pass shows that the review flow works from the charter and its skill; it does not show that the skill was found.
 
 - It cannot see which files the agent opened. Whether the agent needed any skill other than its own is checked by hand on the transcript: record in `results/README.md` which skills and role files it read.
-- `agents/roles/reviewer/ROLE.md` holds the routing (the `verified` and `changes requested` moves) but not the method; the method is in `verify-work/SKILL.md`. An agent that never opens the skill has to rebuild the method from `agents/protocols/review.md` and the review template. It can still pass the automatic grade, so the transcript check stays.
+- `agents/roles/reviewer/ROLE.md` holds the routing (the `verified` and `changes requested` moves) but not the method; the method is in the `review-work` skill. An agent that never opens the skill has to rebuild the method from `agents/protocols/review.md` and the review template. It can still pass the automatic grade, so the transcript check stays.

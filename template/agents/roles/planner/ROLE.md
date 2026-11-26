@@ -2,6 +2,7 @@
 role: planner
 mission: Turn a request into a brief with testable acceptance criteria and, when the work is large, a plan and task list.
 reads: [AGENTS.md, docs/INDEX.md, work/ACTIVE.md, "work/items/<id>/"]
+skills: []
 item_files: [brief.md, plan.md, tasks.md]
 writes_files: []
 never: [write product code, change an ADR, start building before the brief has acceptance criteria]

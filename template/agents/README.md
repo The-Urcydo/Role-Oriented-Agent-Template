@@ -11,15 +11,15 @@ The harness that tells any AI agent how to work in this repo. It is plain Markdo
 
 | Folder | What it is |
 |---|---|
-| `roles/` | One folder per role: `ROLE.md` (mission, what it reads, which item files it writes, what it must never do) and `skills/` for the skills only that role uses |
-| `protocols/` | The rules between roles: handoff state machine, escalation, definition of done, review, parallel work |
-| `skills/` | Skills shared by several roles or by anyone, in the open Agent Skills format (`SKILL.md` per folder). A skill only one role uses lives in `roles/<role>/skills/` |
+| `roles/` | One folder per role with its charter `ROLE.md`: mission, what it reads, which skills it uses, which item files it writes, what it must never do |
+| `protocols/` | The rules between roles: handoff state machine, escalation and grants, definition of done, review, parallel work |
+| `skills/` | Every skill, one folder each, in the open Agent Skills format (`SKILL.md` per folder). A charter's `skills:` lists the ones its role uses |
 | `adapters/` | Config for generating tool-specific files (Claude Code; optional Cursor, Copilot and Gemini) from the above |
-| `ROSTER.md` | Generated table of roles, their exclusive skills and what each owns |
+| `ROSTER.md` | Generated table of roles, the skills each uses and what each owns |
 
 ## Roles and sessions
 
-Roles come in three tiers. Flow roles own a status in the state machine: orchestrator, planner, builder, reviewer and the scribe. Advisory roles produce an artifact on request: architect and researcher. Optional modules are cut as one folder: security today.
+Roles come in three tiers. Flow roles own a status in the state machine: orchestrator, planner, builder, reviewer and the scribe. Advisory roles produce an artifact on request: architect and researcher. Optional modules are cut as one unit: security today, the role with its `review-security` skill.
 
 A role runs as a hat by default: the session that holds the item reads the charter and acts as that role. A separate session is required only for review, and for security when installed: the reviewer never runs in the session that built the item. A role that needs its own context window, such as the researcher or a builder in a worktree, may run isolated; that is a choice of the session, not a status change.
 
@@ -43,4 +43,4 @@ Full rules for each transition: `protocols/handoff.md`.
 
 ## Working with non-Claude agents
 
-Any agent that can read files and run shell commands can use this harness: point it at `AGENTS.md`, tell it which role it plays, and have it read `roles/<role>/ROLE.md` plus the skills listed for it in `ROSTER.md` (shared skills are listed separately). Claude Code additionally gets generated subagents and skills under `.claude/` (see `adapters/README.md`). Cursor, GitHub Copilot and Gemini CLI adapters can be switched on in `adapters/targets.json`; for any other tool's native format, add a target there and extend `tools/sync_agents.py`.
+Any agent that can read files and run shell commands can use this harness: point it at `AGENTS.md`, tell it which role it plays, and have it read `roles/<role>/ROLE.md` plus the skills named in its `skills:` field (`ROSTER.md` lists them). Claude Code additionally gets generated subagents and skills under `.claude/` (see `adapters/README.md`). Cursor, GitHub Copilot and Gemini CLI adapters can be switched on in `adapters/targets.json`; for any other tool's native format, add a target there and extend `tools/sync_agents.py`.

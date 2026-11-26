@@ -27,7 +27,7 @@ import sync_indexes  # noqa: E402
 from _lib import (  # noqa: E402
     ACCESS_LEVELS, ADR_STATUSES, AUDIENCES, DEFAULT_OWNER, DIATAXIS_DIRS, DOC_STATUSES, DOC_TYPES, ITEM_ID_RE, NEEDS_EVIDENCE,
     RESTRICTING_LEVELS, ROLE_FILE, SKIP_DIRS, STALE_DAYS, STALE_REWARN_DAYS, STATUSES, TOOL_NAME_RE, TYPE_FOLDERS,
-    FrontMatterError, doc_type_dir, folder_owners,
+    SKILL_MAP_KEYS, SKILL_METADATA, SKILLS_DIR, FrontMatterError, doc_type_dir, folder_owners,
     git_last_change, iter_docs, iter_items, iter_markdown, load_catalog, load_modules, load_roles, load_targets,
     md_links, module_of, module_present, parse_date, parse_front_matter, parse_queue, read_fm, read_text,
     repo_root, resolve_link, skill_folders, today,
@@ -36,10 +36,13 @@ from _lib import (  # noqa: E402
 ROOT_AGENTS_MAX_LINES = 100
 NESTED_AGENTS_MAX_LINES = 60
 DOC_MAX_LINES = 400
-SKILL_MAX_LINES = 500
+SKILL_BODY_MAX_LINES = 40  # Block A: about 40 lines; the Agent Skills spec recommends < 500 lines / 5,000 tokens
+# Top-level SKILL.md fields: the Agent Skills specification set. A tool-specific field belongs in a generated adapter.
+SKILL_FIELDS = ("name", "description", "license", "compatibility", "metadata", "allowed-tools")
 SUMMARY_MAX = 240
 QUESTION_WARN_DAYS = 7
 ROLE_REQUIRED = ("role", "mission", "reads", "never", "done_when", "escalate_when")
+# `skills` is required but may be an empty list, so it gets a presence test of its own (ROLE_REQUIRED rejects empty values).
 TREE_CHARS = ("├──", "└──", "│  ")
 
 
@@ -245,12 +248,9 @@ def check_roles(root: Path, rep: Report) -> None:
                 if not (entry / ROLE_FILE).is_file():
                     rep.error("role", rel(root, entry), f"role folder has no {ROLE_FILE}")
                     continue
-                lane = entry / "skills"
-                if not lane.is_dir():
-                    rep.error("role", rel(root, entry),
-                              "role folder has no skills/ (keep it with skills/.gitkeep even when empty)")
-                elif not any(lane.iterdir()):
-                    rep.error("role", rel(root, lane), "role skills/ folder is empty; add skills/.gitkeep or a skill folder")
+                if (entry / "skills").exists():
+                    rep.error("role", rel(root, entry / "skills"),
+                              f"skills live in {SKILLS_DIR}/ (one flat folder); move this folder's skills there and list them in the charter's `skills:`")
     if not roles:
         return
     seen_item: dict[str, str] = {}
@@ -267,6 +267,17 @@ def check_roles(root: Path, rep: Report) -> None:
         for k in ROLE_REQUIRED:
             if not fm.get(k):
                 rep.error("role", p, f"missing '{k}'")
+        listed = fm.get("skills")
+        if "skills" not in fm or listed is None:
+            rep.error("role", p, "missing 'skills' (a list of skill names; use [] for none)")
+        elif not isinstance(listed, list) or not all(isinstance(s, str) and s for s in listed):
+            rep.error("role", p, "skills must be a list of skill names, for example [write-handoff]")
+        else:
+            for s in sorted(set(listed)):
+                if listed.count(s) > 1:
+                    rep.error("role", p, f"skills lists '{s}' more than once")
+                if not (root / SKILLS_DIR / s / "SKILL.md").is_file():
+                    rep.error("role", p, f"skills names '{s}', but {SKILLS_DIR}/{s}/SKILL.md does not exist")
         if fm.get("role") != name:
             rep.error("role", p, f"role '{fm.get('role')}' must equal the folder name '{name}'")
         if "access" in fm and fm["access"] not in ACCESS_LEVELS:
@@ -447,23 +458,16 @@ def check_workspace_packages(root: Path, rep: Report) -> None:
 
 
 def check_skills(root: Path, rep: Report) -> None:
-    # Two lanes: agents/skills/<name>/ (shared) and agents/roles/<role>/skills/<name>/ (one role).
-    # `.claude/skills/` is flat, so a name may appear only once across both.
-    seen: dict[str, str] = {}
-    for _owner, d in skill_folders(root):
+    # One flat lane: agents/skills/<name>/. `.claude/skills/` is generated from it.
+    for d in skill_folders(root):
         sk = d / "SKILL.md"
         r = rel(root, sk)
         if not sk.exists():
             rep.error("skill", rel(root, d), "skill folder has no SKILL.md")
             continue
-        if d.name in seen:
-            rep.error("skill", rel(root, d),
-                      f"skill name '{d.name}' is already used by {seen[d.name]}; names must be unique across agents/skills/ and every role's skills/")
-        else:
-            seen[d.name] = rel(root, d)
         text = read_text(sk)
         try:
-            fm, _ = parse_front_matter(text)
+            fm, body = parse_front_matter(text, SKILL_MAP_KEYS)
         except FrontMatterError as exc:
             rep.error("skill", r, str(exc))
             continue
@@ -475,9 +479,20 @@ def check_skills(root: Path, rep: Report) -> None:
             rep.error("skill", r, f"name '{name}' must match the folder '{d.name}'")
         if not desc.strip() or len(desc) > 1024:
             rep.error("skill", r, "description must be 1-1024 chars and say what the skill does and when to use it")
-        n = len(text.splitlines())
-        if n > SKILL_MAX_LINES:
-            rep.warn("skill-size", r, f"{n} lines; move detail into references/ (spec recommends < {SKILL_MAX_LINES})")
+        for field in sorted(set(fm) - set(SKILL_FIELDS)):
+            rep.error("skill", r, f"field '{field}' is not in the Agent Skills specification; the source holds only "
+                      f"{', '.join(SKILL_FIELDS)}. A tool-specific setting goes in metadata.invocation (value `user`) and is generated into the adapter copy")
+        meta = fm.get("metadata")
+        if "metadata" in fm and not isinstance(meta, dict):
+            rep.error("skill", r, "metadata must hold indented `key: value` lines (invocation, requires), or be left out")
+        for key, value in (meta or {}).items() if isinstance(meta, dict) else []:
+            if key not in SKILL_METADATA:
+                rep.error("skill", r, f"metadata key '{key}' is not allowed; use one of: {', '.join(SKILL_METADATA)}")
+            elif value not in SKILL_METADATA[key]:
+                rep.error("skill", r, f"metadata.{key} '{value}' is not allowed; use one of: {', '.join(SKILL_METADATA[key])}")
+        n = len(body.strip().splitlines())
+        if n > SKILL_BODY_MAX_LINES:
+            rep.warn("skill-size", r, f"{n} body lines; keep it to about {SKILL_BODY_MAX_LINES} and move detail into references/")
 
 
 # ------------------------------------------------------------------ work state

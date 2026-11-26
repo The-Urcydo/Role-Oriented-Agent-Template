@@ -1,7 +1,8 @@
 ---
 name: merge-work
 description: Merges a finished branch or pull request after the owner's merge grant, a self-audit of the work, a check against main and the tools, and green CI on the current head. Use only when the owner asks you to merge, or has said an item may be merged.
-disable-model-invocation: true
+metadata:
+  invocation: user
 ---
 # Merge work
 

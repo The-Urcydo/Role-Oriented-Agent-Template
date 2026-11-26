@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Generate tool-specific adapters from the tool-neutral harness in agents/.
 
-Source of truth:  agents/roles/<role>/ROLE.md, agents/skills/*/ (shared skills),
-                  agents/roles/<role>/skills/*/ (skills only that role uses), every AGENTS.md
+Source of truth:  agents/roles/<role>/ROLE.md (its `skills:` list), agents/skills/*/ (one flat folder), every AGENTS.md
 Generated for Claude Code (when enabled in agents/adapters/targets.json):
   .claude/agents/<role>.md        subagent definitions (name + description + charter; plus `model` and
                                   `disallowedTools` when targets.json maps them, and `skills` listing the
-                                  role's own skills, see adapters/README.md)
-  .claude/skills/<name>/...       copies of the open-standard skill folders (flat, from both lanes)
+                                  skills only that role lists, see adapters/README.md)
+  .claude/skills/<name>/...       copies of the open-standard skill folders (flat)
   <dir>/CLAUDE.md                 one-line shim importing the sibling AGENTS.md
                                   (Claude Code reads CLAUDE.md instead of AGENTS.md
                                   when both exist, so each AGENTS.md needs a shim)
@@ -37,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _lib import (  # noqa: E402
     RESTRICTING_LEVELS, SKIP_DIRS, TOOL_NAME_RE, folder_owners, load_roles, load_targets, read_fm, read_text,
-    repo_root, sha256_bytes, skill_folders, write_text, yaml_scalar,
+    claude_skill_text, read_skill_fm, repo_root, sha256_bytes, skill_folders, skill_listers, write_text, yaml_scalar,
 )
 
 MANIFEST = "agents/adapters/manifest.json"
@@ -84,17 +83,34 @@ def _role_description(role: str, fm: dict) -> str:
 
 
 def _preloadable_skills(root: Path) -> dict[str, list[str]]:
-    """Role -> the skills only that role uses, in name order. A Claude subagent preloads only the skills it
-    lists (it may find others itself, but only if it decides to). Claude Code does not preload a skill that
-    sets `disable-model-invocation`, so those are left out. A SKILL.md whose front matter cannot be read is
-    still listed: check.py reports it."""
+    """Role -> the skills that only that role lists, in name order. A Claude subagent preloads only the skills
+    it lists (it may find others itself, but only if it decides to). Claude Code does not preload a skill that
+    sets `disable-model-invocation`, so a skill with `metadata.invocation: user` is left out. A skill that
+    several roles list is not preloaded: its full text would be added to each of them. A SKILL.md whose front
+    matter cannot be read is still listed: check.py reports it."""
     out: dict[str, list[str]] = {}
-    for owner, sk in skill_folders(root):
-        if not owner or not (sk / "SKILL.md").is_file():
+    for skill, roles in sorted(skill_listers(load_roles(root)).items()):
+        sk = root / "agents" / "skills" / skill / "SKILL.md"
+        if len(roles) != 1 or not sk.is_file():
             continue
-        if read_fm(sk / "SKILL.md").get("disable-model-invocation") in (True, "true"):
+        meta = read_skill_fm(sk).get("metadata")
+        if isinstance(meta, dict) and meta.get("invocation") == "user":
             continue
-        out.setdefault(owner, []).append(sk.name)
+        out.setdefault(roles[0], []).append(skill)
+    return out
+
+
+def _invalid_skill_metadata(root: Path) -> list[str]:
+    """SKILL.md files whose `metadata` is present but not a one-level map. check.py reports the shape in
+    detail; the sync refuses them so a malformed source is never copied into every adapter silently."""
+    out: list[str] = []
+    for sk in skill_folders(root):
+        md = sk / "SKILL.md"
+        if not md.is_file():
+            continue
+        fm = read_skill_fm(md)
+        if "metadata" in fm and not isinstance(fm["metadata"], dict):
+            out.append(f"agents/skills/{sk.name}/SKILL.md")
     return out
 
 
@@ -174,12 +190,15 @@ def _claude_outputs(root: Path, cfg: dict) -> dict[str, bytes]:
     for role, fm, body, owned in _role_files(root):
         out[f"{agents_dir}/{role}.md"] = render_subagent(
             role, fm, body, owned, _claude_extra_head(role, fm, cfg, preload.get(role))).encode("utf-8")
-    # Shared skills and role-only skills both land flat in `.claude/skills/<name>/`.
-    for _owner, sk in skill_folders(root):
+    # Every skill folder of agents/skills/ lands flat in `.claude/skills/<name>/`.
+    for sk in skill_folders(root):
         if (sk / "SKILL.md").exists():
             for f in sorted(sk.rglob("*")):
                 if f.is_file() and "__pycache__" not in f.parts:
-                    out[f"{skills_dir}/{sk.name}/{f.relative_to(sk).as_posix()}"] = f.read_bytes()
+                    data = f.read_bytes()
+                    if f == sk / "SKILL.md":
+                        data = claude_skill_text(data.decode("utf-8")).encode("utf-8")
+                    out[f"{skills_dir}/{sk.name}/{f.relative_to(sk).as_posix()}"] = data
     if cfg.get("claude_md_shims", True):
         for d in _agents_md_dirs(root):
             rel = (d / "CLAUDE.md").relative_to(root).as_posix()
@@ -297,6 +316,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="exit 1 if adapters are out of date")
     args = ap.parse_args(argv)
     root = repo_root()
+    bad = _invalid_skill_metadata(root)
+    if bad:
+        for p in bad:
+            print(f"{p}: metadata must hold indented `key: value` lines (invocation, requires), or be left out; "
+                  f"run `python3 tools/check.py`")
+        return 1
     if args.check:
         problems = drift(root)
         for p in problems:

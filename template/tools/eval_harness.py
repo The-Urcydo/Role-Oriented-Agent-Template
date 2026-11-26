@@ -48,7 +48,7 @@ KNOWN_TASKS = {
     "role-skill-discovery", "ambiguous-directive", "merge-discipline", "callable-researcher",
     "security-routing", "conditional-scribe",
 }
-_REVIEW_SKILL = "agents/roles/reviewer/skills/verify-work/SKILL.md"
+_REVIEW_SKILL = "agents/skills/review-work/SKILL.md"
 # security-routing: two items in review, told apart only by the brief's Security review section.
 _SECURITY_BRIEF = """# Brief: {title}
 
@@ -1038,11 +1038,11 @@ def grade_task(sandbox: Path, task_id: str, meta: dict) -> tuple[bool, str]:
 
     if task_id == "role-skill-discovery":
         # The repo state cannot show which SKILL.md files an agent opened. So this grades what the
-        # verify-work skill produces, and that nothing else was touched. Whether the agent read only
+        # review-work skill produces, and that nothing else was touched. Whether the agent read only
         # its own role's skill is a manual check on the transcript (see the task file). The reviewer's
         # ROLE.md repeats the skill's steps, so a pass does not prove the skill was opened.
         if not (sandbox / _REVIEW_SKILL).is_file():
-            return False, f"{_REVIEW_SKILL} is missing: the reviewer bundle has no verify-work skill to find"
+            return False, f"{_REVIEW_SKILL} is missing: the reviewer bundle has no review-work skill to find"
         items = [i.id for i in iter_items(sandbox)]
         if items != [meta["item_id"]]:
             return False, f"expected only the seeded item {meta['item_id']}, found {items}"
@@ -1114,7 +1114,7 @@ def grade_task(sandbox: Path, task_id: str, meta: dict) -> tuple[bool, str]:
         made = sorted(f for f in _CODE_FOLDERS if (sandbox / f).exists())
         if made:
             return False, f"the reviewer created code folders {made}"
-        return True, "found the verify-work skill, wrote a filled review.md, verified with its own evidence, changed nothing else"
+        return True, "found the review-work skill, wrote a filled review.md, verified with its own evidence, changed nothing else"
 
     if task_id == "security-routing":
         # The repo state shows the hand-over (owner role, status, next step), not that security then ran in its own
