@@ -521,9 +521,17 @@ class HealthTests(RepoTestCase):
     def test_skill_allowed_tools_must_be_a_space_separated_string(self) -> None:
         p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
         original = p.read_text(encoding="utf-8")
-        p.write_text(original.replace("description:", "allowed-tools: [Read, Grep]\ndescription:", 1),
-                     encoding="utf-8")
-        self.assertIn("Read Grep", self.fails("check"))
+        for value in ("[Read, Grep]", "{Read: true}", "\n  Read: true"):
+            with self.subTest(value=value):
+                p.write_text(original.replace("description:", f"allowed-tools: {value}\ndescription:", 1),
+                             encoding="utf-8")
+                self.ok("sync_agents")
+                r = self.sh("check")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                out = r.stdout + r.stderr
+                self.assertIn("allowed-tools", out)
+                self.assertIn("Read Grep", out)
+                self.assertNotIn("Traceback", out)
         p.write_text(original.replace("description:", "allowed-tools: Read Grep\ndescription:", 1),
                      encoding="utf-8")
         self.ok("sync_agents")

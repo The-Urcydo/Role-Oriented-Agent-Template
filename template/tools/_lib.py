@@ -245,6 +245,8 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
 
     A key named in `map_keys` (skills pass `SKILL_MAP_KEYS`) may hold a one-level map of string values:
     `metadata:` followed by indented `name: value` lines. Charters pass nothing, so they stay strict.
+    Mapping-shaped `allowed-tools` values are retained only as maps so the skill check can report
+    that the field requires a space-separated string rather than a generic nesting error.
 
     Returns (None, text) when the file has no front matter. Raises FrontMatterError
     when the block exists but cannot be parsed.
@@ -268,6 +270,15 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
                 if not isinstance(data[key], list):
                     raise FrontMatterError(f"line {offset}: list item under scalar key '{key}'")
                 data[key].append(_scalar(_strip_comment(stripped[1:].strip())))
+                continue
+            if key == "allowed-tools" and KEY_RE.match(stripped):
+                if data.get(key) is not None:
+                    raise FrontMatterError(f"line {offset}: nested structures are not supported")
+                # Preserve the mapping shape so check_skills can give field-specific guidance.
+                # Key/value parsing stays strict, so malformed YAML still fails normally.
+                data[key] = {}
+                _, rest = stripped.split(":", 1)
+                _scalar(rest.strip())
                 continue
             if key in map_keys and (data.get(key) in (None, {}) or isinstance(data.get(key), dict)):
                 sub = KEY_RE.match(stripped)
@@ -294,6 +305,11 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
             raise FrontMatterError(f"line {offset}: block scalars are not supported")
         if rest == "":
             data[key] = None
+        elif rest.startswith("{") and rest.endswith("}"):
+            if key == "allowed-tools":
+                data[key] = {}  # a mapping, so the skill check can give the field-specific fix
+            else:
+                _guard_plain(rest)
         elif rest.startswith("[") and rest.endswith("]"):
             data[key] = _split_inline(rest[1:-1])
         else:
