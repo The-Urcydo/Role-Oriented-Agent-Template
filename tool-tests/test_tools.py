@@ -117,6 +117,12 @@ class RepoTestCase(unittest.TestCase):
         line = "skills: [" + ", ".join(names) + "]"
         p.write_text(re.sub(r"(?m)^skills: .*$", line, p.read_text(encoding="utf-8"), count=1), encoding="utf-8")
 
+    def charter_skills(self, role: str) -> list[str]:
+        """A role's `skills:` list, parsed by the repository parser."""
+        p = self.repo / "agents" / "roles" / role / "ROLE.md"
+        fm, _ = _lib.parse_front_matter(p.read_text(encoding="utf-8"))
+        return fm.get("skills") or []
+
 
 class FrontMatterTests(unittest.TestCase):
     def test_parses_scalars_and_lists(self) -> None:
@@ -419,7 +425,11 @@ class HealthTests(RepoTestCase):
                 self.assertNotIn("Traceback", out)
                 r = self.sh("sync_agents")
                 self.assertNotEqual(r.returncode, 0, f"sync_agents accepted {shape}:\n{r.stdout}\n{r.stderr}")
-                self.assertNotIn("Traceback", r.stdout + r.stderr)
+                lines = [line for line in (r.stdout + r.stderr).splitlines() if line.strip()]
+                self.assertEqual(len(lines), 1, f"sync_agents: {lines}")
+                self.assertIn("agents/skills/review-work/SKILL.md", lines[0])
+                self.assertIn("metadata must hold indented `key: value` lines", lines[0])
+                self.assertNotIn("Traceback", lines[0])
         p.write_text(original, encoding="utf-8")
 
     def test_skill_body_over_40_lines_warns_and_40_does_not(self) -> None:
@@ -1476,11 +1486,45 @@ class AdapterTests(RepoTestCase):
             self.assertNotIn("disallowedTools", self.claude_head(role), role)
 
     # --- a role's listed skills are preloaded into its Claude subagent (a subagent preloads only the skills it lists) ---
+    def user_invoked(self, skill: str) -> bool:
+        meta = _lib.read_skill_fm(self.repo / "agents" / "skills" / skill / "SKILL.md").get("metadata")
+        return isinstance(meta, dict) and meta.get("invocation") == "user"
+
+    def preloaded(self, role: str) -> list[str]:
+        lines = self.claude_head(role).splitlines()
+        if "skills:" not in lines:
+            return []
+        out: list[str] = []
+        for line in lines[lines.index("skills:") + 1:]:
+            if not line.startswith("  - "):
+                break
+            out.append(line[4:])
+        return out
+
     def test_claude_subagent_preloads_the_roles_own_skills(self) -> None:
+        # R6: a skill is preloaded for a role only when exactly one charter lists it and it is not
+        # `metadata.invocation: user`; the generated list is in name order.
         self.set_claude()
         self.ok("sync_agents")
-        self.assertIn("skills:\n  - review-work\n", self.claude_head("reviewer"))
-        self.assertIn("skills:\n  - record-decision\n", self.claude_head("architect"))
+        roles = sorted(p.name for p in (self.repo / "agents" / "roles").iterdir() if p.is_dir())
+        listings: dict[str, list[str]] = {}
+        for role in roles:
+            for skill in self.charter_skills(role):
+                listings.setdefault(skill, []).append(role)
+        expected = {
+            role: sorted(s for s, owners in listings.items()
+                         if owners == [role] and not self.user_invoked(s))
+            for role in roles
+        }
+        actual = {role: self.preloaded(role) for role in roles}
+        self.assertEqual(actual, expected)
+        all_preloaded = {s for names in actual.values() for s in names}
+        merge_meta = _lib.read_skill_fm(self.repo / "agents" / "skills" / "merge-work" / "SKILL.md").get("metadata")
+        self.assertEqual(merge_meta, {"invocation": "user"})
+        self.assertNotIn("merge-work", all_preloaded, "merge-work is metadata.invocation: user")
+        for skill, owners in listings.items():
+            if len(owners) > 1:
+                self.assertNotIn(skill, all_preloaded, f"{skill} is listed by several roles: {owners}")
         self.ok("sync_agents", "--check")
         self.ok("check", "--strict")
 
@@ -1503,17 +1547,31 @@ class AdapterTests(RepoTestCase):
 
     def test_a_skill_listed_by_two_roles_or_by_none_is_not_preloaded(self) -> None:
         # Preloading repeats the full text in every subagent that lists it, so one owner is the rule.
+        # Pick a currently exclusive, non-user skill and make a second role list it; nothing here
+        # depends on the P1 skill set, so P2's charters keep the test valid.
         self.set_claude()
-        self.set_skills("orchestrator", ["record-decision"])  # architect and orchestrator now both list it
+        import sync_agents
+        roles = sorted(p.name for p in (self.repo / "agents" / "roles").iterdir() if p.is_dir())
+        listings: dict[str, list[str]] = {}
+        for role in roles:
+            for skill in self.charter_skills(role):
+                listings.setdefault(skill, []).append(role)
+        target, owner = next((s, owners[0]) for s, owners in sorted(listings.items())
+                             if len(owners) == 1 and not self.user_invoked(s))
+        other = next(role for role in roles if role != owner)
+        self.set_skills(other, self.charter_skills(other) + [target])
+        # A skill no charter lists is not preloaded either.
+        folder = self.repo / "agents" / "skills" / "unlisted-extra"
+        folder.mkdir()
+        (folder / "SKILL.md").write_text(
+            "---\nname: unlisted-extra\ndescription: A skill no charter lists. Use when testing preload exclusivity.\n"
+            "---\n# Extra\n")
         self.ok("sync_indexes")
         self.ok("sync_agents")
-        self.assertNotIn("skills:", self.claude_head("architect"))
-        self.assertNotIn("skills:", self.claude_head("orchestrator"))
-        import sync_agents
         preload = sync_agents._preloadable_skills(self.repo)
         listed = {s for names in preload.values() for s in names}
-        self.assertNotIn("record-decision", listed)
-        self.assertNotIn("write-doc", listed, "write-doc is listed by no charter in P1")
+        self.assertNotIn(target, listed, f"{target} is listed by both {owner} and {other}")
+        self.assertNotIn("unlisted-extra", listed)
         self.ok("check", "--strict")
 
     def test_a_role_with_no_skill_gets_no_skills_line(self) -> None:

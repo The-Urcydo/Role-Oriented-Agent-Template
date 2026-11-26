@@ -268,7 +268,7 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
                     raise FrontMatterError(f"line {offset}: list item under scalar key '{key}'")
                 data[key].append(_scalar(_strip_comment(stripped[1:].strip())))
                 continue
-            if key in map_keys and data.get(key) in (None, {}) or isinstance(data.get(key), dict):
+            if key in map_keys and (data.get(key) in (None, {}) or isinstance(data.get(key), dict)):
                 sub = KEY_RE.match(stripped)
                 if not sub:
                     raise FrontMatterError(f"line {offset}: cannot parse {raw!r}")

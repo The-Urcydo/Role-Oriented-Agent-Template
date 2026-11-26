@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _lib import (  # noqa: E402
     RESTRICTING_LEVELS, SKIP_DIRS, TOOL_NAME_RE, folder_owners, load_roles, load_targets, read_fm, read_text,
-    SKILL_MAP_KEYS, claude_skill_text, read_skill_fm, repo_root, sha256_bytes, skill_folders, skill_listers, write_text, yaml_scalar,
+    claude_skill_text, read_skill_fm, repo_root, sha256_bytes, skill_folders, skill_listers, write_text, yaml_scalar,
 )
 
 MANIFEST = "agents/adapters/manifest.json"

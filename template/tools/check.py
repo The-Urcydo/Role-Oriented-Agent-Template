@@ -30,7 +30,7 @@ from _lib import (  # noqa: E402
     SKILL_MAP_KEYS, SKILL_METADATA, SKILLS_DIR, FrontMatterError, doc_type_dir, folder_owners,
     git_last_change, iter_docs, iter_items, iter_markdown, load_catalog, load_modules, load_roles, load_targets,
     md_links, module_of, module_present, parse_date, parse_front_matter, parse_queue, read_fm, read_text,
-    repo_root, resolve_link, skill_folders, skill_listers, today,
+    repo_root, resolve_link, skill_folders, today,
 )
 
 ROOT_AGENTS_MAX_LINES = 100

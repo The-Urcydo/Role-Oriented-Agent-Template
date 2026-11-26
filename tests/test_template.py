@@ -175,23 +175,36 @@ def test_every_role_is_a_charter_without_a_skills_folder(full):
     assert not flat, f"flat role files left behind: {flat}"
 
 
-P1_SKILLS = {
-    "architect": ["record-decision"],
-    "builder": [],
-    "orchestrator": [],
-    "planner": [],
-    "researcher": ["research-question"],
-    "reviewer": ["review-work"],
-    "scribe": [],
-    "security": ["review-security"],
-}
+def _charter_skills_with_repo_parser(project: Path) -> dict[str, list[str]]:
+    """Each generated charter's `skills:` list, parsed by that project's own `_lib` (the repo parser)."""
+    previous = sys.modules.pop("_lib", None)
+    sys.path.insert(0, str(project / "tools"))
+    try:
+        import _lib
+        out: dict[str, list[str]] = {}
+        for charter in sorted((project / "agents" / "roles").glob("*/ROLE.md")):
+            fm, _ = _lib.parse_front_matter(charter.read_text(encoding="utf-8"))
+            assert fm is not None, charter
+            skills = fm.get("skills")
+            assert isinstance(skills, list) and all(isinstance(s, str) for s in skills), f"{charter}: {skills!r}"
+            out[charter.parent.name] = skills
+        return out
+    finally:
+        sys.path.remove(str(project / "tools"))
+        sys.modules.pop("_lib", None)
+        if previous is not None:
+            sys.modules["_lib"] = previous
 
 
 def test_roster_skills_column_follows_each_charter(full):
     text = (full / "agents" / "ROSTER.md").read_text(encoding="utf-8")
     assert "| Role | Mission | Owns (exclusive writes) | Item files | Skills |" in text
     assert "Shared skills (any role)" not in text, "there is one flat skills folder, not a shared lane"
-    for role, skills in P1_SKILLS.items():
+    skills_by_role = _charter_skills_with_repo_parser(full)
+    assert skills_by_role, "no charters found"
+    roster_roles = {line.split("`")[1] for line in text.splitlines() if line.startswith("| [`")}
+    assert roster_roles == set(skills_by_role), f"roster roles {sorted(roster_roles)} != charters {sorted(skills_by_role)}"
+    for role, skills in skills_by_role.items():
         row = next(r for r in text.splitlines() if r.startswith(f"| [`{role}`]"))
         cells = [c.strip() for c in row.split("|")]
         expected = ", ".join(f"[`{s}`](skills/{s}/SKILL.md)" for s in skills) or "—"
@@ -653,8 +666,8 @@ def test_copier_update_merges_improvements_and_respects_cuts(tmp_path):
 
 def test_front_matter_parser_agrees_with_a_real_yaml_parser(full):
     """Our stdlib parser must accept exactly what PyYAML accepts, with the same values, so files
-    that pass tools/check.py also render on GitHub and open in other tools. Skills pass the one-level
-    `metadata:` map keys, so the merge-work front matter is compared as the dict PyYAML builds."""
+    that pass tools/check.py also render on GitHub and open in other tools. Only files under
+    `agents/skills/` get the one-level `metadata:` map keys; charters stay strict."""
     yaml = pytest.importorskip("yaml")
     import datetime
     sys.path.insert(0, str(full / "tools"))
@@ -666,8 +679,8 @@ def test_front_matter_parser_agrees_with_a_real_yaml_parser(full):
             return [norm(x) for x in v] if isinstance(v, list) else v
         problems, checked = [], 0
         for p in full.rglob("*.md"):
-            if ".git" in p.parts:
-                continue
+            if ".git" in p.parts or ".claude" in p.parts:
+                continue  # generated adapter copies; their sources are checked here and by sync_agents --check
             text = p.read_text(encoding="utf-8")
             m = _lib.FM_RE.match(text)
             if not m:
@@ -676,7 +689,8 @@ def test_front_matter_parser_agrees_with_a_real_yaml_parser(full):
             rel = p.relative_to(full).as_posix()
             try:
                 real = {k: norm(v) for k, v in (yaml.safe_load(m.group(1)) or {}).items()}
-                mine, _ = _lib.parse_front_matter(text, _lib.SKILL_MAP_KEYS)
+                map_keys = _lib.SKILL_MAP_KEYS if rel.startswith("agents/skills/") else ()
+                mine, _ = _lib.parse_front_matter(text, map_keys)
             except Exception as e:  # either parser rejecting is a defect in a shipped file
                 problems.append(f"{rel}: {type(e).__name__}: {e}")
                 continue
