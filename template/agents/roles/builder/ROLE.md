@@ -2,6 +2,7 @@
 role: builder
 mission: Implement work items exactly as briefed, with tests, in small verifiable steps, and hand over a clean branch.
 reads: [AGENTS.md, docs/INDEX.md, "work/items/<id>/brief.md", "work/items/<id>/plan.md", "work/items/<id>/tasks.md", "work/items/<id>.md"]
+skills: []
 item_files: []
 writes_files: []
 never: [mark your own work verified or done, change acceptance criteria, merge without review, expand scope]

@@ -240,8 +240,11 @@ def _split_inline(s: str) -> list[Any]:
     return [_scalar(p) for p in parts if p.strip() != ""]
 
 
-def parse_front_matter(text: str) -> tuple[dict[str, Any] | None, str]:
-    """Parse a small YAML subset: scalars, inline lists, block lists. No nesting.
+def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[str, Any] | None, str]:
+    """Parse a small YAML subset: scalars, inline lists, block lists. No nesting, with one exception.
+
+    A key named in `map_keys` (skills pass `SKILL_MAP_KEYS`) may hold a one-level map of string values:
+    `metadata:` followed by indented `name: value` lines. Charters pass nothing, so they stay strict.
 
     Returns (None, text) when the file has no front matter. Raises FrontMatterError
     when the block exists but cannot be parsed.
@@ -264,6 +267,20 @@ def parse_front_matter(text: str) -> tuple[dict[str, Any] | None, str]:
                 if not isinstance(data[key], list):
                     raise FrontMatterError(f"line {offset}: list item under scalar key '{key}'")
                 data[key].append(_scalar(_strip_comment(stripped[1:].strip())))
+                continue
+            if key in map_keys and data.get(key) in (None, {}) or isinstance(data.get(key), dict):
+                sub = KEY_RE.match(stripped)
+                if not sub:
+                    raise FrontMatterError(f"line {offset}: cannot parse {raw!r}")
+                name, value = sub.group(1), _strip_comment(sub.group(2)).strip()
+                if data.get(key) is None:
+                    data[key] = {}
+                if name in data[key]:
+                    raise FrontMatterError(f"line {offset}: duplicate key '{key}.{name}'")
+                parsed = _scalar(value) if value else None
+                if not isinstance(parsed, str):
+                    raise FrontMatterError(f"line {offset}: '{key}.{name}' must be a plain string (one level, no lists)")
+                data[key][name] = parsed
                 continue
             raise FrontMatterError(f"line {offset}: nested structures are not supported")
         km = KEY_RE.match(raw)
@@ -486,23 +503,50 @@ def load_roles(root: Path) -> dict[str, dict[str, Any]]:
     return roles
 
 
-def skill_folders(root: Path) -> list[tuple[str, Path]]:
-    """Every skill folder as (owner, path).
+SKILLS_DIR = "agents/skills"
+SKILL_MAP_KEYS = ("metadata",)
+# `metadata` keys a skill may carry, with the values each may take (Agent Skills spec: metadata is a string map).
+SKILL_METADATA = {"invocation": ("user",), "requires": ("work-tracker",)}
 
-    Shared skills live in `agents/skills/<name>/` and have owner "". A skill that only one role
-    uses lives in `agents/roles/<role>/skills/<name>/` and has that role as owner.
-    """
-    found: list[tuple[str, Path]] = []
-    shared = root / "agents" / "skills"
-    if shared.is_dir():
-        found += [("", p) for p in sorted(shared.iterdir()) if p.is_dir()]
-    roles = root / "agents" / "roles"
-    if roles.is_dir():
-        for folder in sorted(p for p in roles.iterdir() if p.is_dir()):
-            lane = folder / "skills"
-            if lane.is_dir():
-                found += [(folder.name, p) for p in sorted(lane.iterdir()) if p.is_dir()]
-    return found
+
+def skill_folders(root: Path) -> list[Path]:
+    """Every skill folder: `agents/skills/<name>/`. One flat lane; a role never owns a skill folder."""
+    base = root / SKILLS_DIR
+    return sorted(p for p in base.iterdir() if p.is_dir()) if base.is_dir() else []
+
+
+def read_skill_fm(path: Path) -> dict[str, Any]:
+    """Front matter of a SKILL.md, `metadata` map included, or {} when absent/unreadable."""
+    try:
+        fm, _ = parse_front_matter(read_text(path), SKILL_MAP_KEYS)
+    except (FrontMatterError, OSError, UnicodeDecodeError):
+        return {}
+    return fm or {}
+
+
+def skill_listers(roles: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+    """Skill name -> the roles whose charter lists it in `skills:` (role order). Unreadable charters and
+    malformed `skills:` values are skipped; check.py reports them."""
+    out: dict[str, list[str]] = {}
+    for role, r in sorted(roles.items()):
+        listed = (r["fm"] or {}).get("skills")
+        for name in listed if isinstance(listed, list) else []:
+            if isinstance(name, str) and role not in out.setdefault(name, []):
+                out[name].append(role)
+    return out
+
+
+def claude_skill_text(text: str) -> str:
+    """The Claude Code copy of a SKILL.md: a skill with `metadata.invocation: user` gets one extra top-level
+    front matter line, `disable-model-invocation: true`, last in the block. Every other byte is unchanged."""
+    m = FM_RE.match(text)
+    try:
+        fm, _ = parse_front_matter(text, SKILL_MAP_KEYS)
+    except FrontMatterError:
+        return text
+    if not m or (fm or {}).get("metadata", {}).get("invocation") != "user":
+        return text
+    return text[:m.end(1)] + "\ndisable-model-invocation: true" + text[m.end(1):]
 
 
 def read_fm(path: Path) -> dict[str, Any]:

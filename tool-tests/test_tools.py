@@ -9,6 +9,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -110,6 +111,12 @@ class RepoTestCase(unittest.TestCase):
         path = self.ok("new_item", slug, *extra)
         return Path(path).parent.name if path.endswith("handoff.md") else Path(path).stem
 
+    def set_skills(self, role: str, names: list[str]) -> None:
+        """Replace a charter's inline `skills:` list, keeping the rest of the file."""
+        p = self.repo / "agents" / "roles" / role / "ROLE.md"
+        line = "skills: [" + ", ".join(names) + "]"
+        p.write_text(re.sub(r"(?m)^skills: .*$", line, p.read_text(encoding="utf-8"), count=1), encoding="utf-8")
+
 
 class FrontMatterTests(unittest.TestCase):
     def test_parses_scalars_and_lists(self) -> None:
@@ -151,6 +158,18 @@ class FrontMatterTests(unittest.TestCase):
             _lib.parse_front_matter("---\na: 1\na: 2\n---\n")
         with self.assertRaises(_lib.FrontMatterError):
             _lib.parse_front_matter("---\na:\n  b: 1\n---\n")
+
+    def test_parses_a_one_level_metadata_map_for_skills_only(self) -> None:
+        text = "---\nname: s\ndescription: d\nmetadata:\n  invocation: user\n  requires: work-tracker\n---\nbody\n"
+        fm, body = _lib.parse_front_matter(text, _lib.SKILL_MAP_KEYS)
+        self.assertEqual(fm["metadata"], {"invocation": "user", "requires": "work-tracker"})
+        self.assertEqual(body, "body\n")
+        # charters pass no map keys, so the same shape stays rejected for them
+        with self.assertRaises(_lib.FrontMatterError):
+            _lib.parse_front_matter("---\nrole: r\nmetadata:\n  invocation: user\n---\n")
+        # a one-level map holds strings only: a list value is refused
+        with self.assertRaises(_lib.FrontMatterError):
+            _lib.parse_front_matter("---\nmetadata:\n  invocation: [user]\n---\n", _lib.SKILL_MAP_KEYS)
 
     def test_set_value_replaces_and_inserts(self) -> None:
         text = "---\nstatus: draft\nevidence:\n- old\nz: 1\n---\nbody\n"
@@ -323,20 +342,12 @@ class HealthTests(RepoTestCase):
         self.assertIn("ownership", self.fails("check"))
 
     def test_skill_name_must_match_folder(self) -> None:
-        p = self.repo / "agents" / "roles" / "reviewer" / "skills" / "verify-work" / "SKILL.md"
-        p.write_text(p.read_text().replace("name: verify-work", "name: Verify_Work", 1))
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        p.write_text(p.read_text().replace("name: review-work", "name: mismatched", 1))
         self.assertIn("skill", self.fails("check"))
 
-    def test_skill_names_must_be_unique_across_shared_and_role_lanes(self) -> None:
-        # .claude/skills/ is flat: the same name in a role lane and in agents/skills/ would collide.
-        src = self.repo / "agents" / "roles" / "reviewer" / "skills" / "verify-work"
-        shutil.copytree(src, self.repo / "agents" / "skills" / "verify-work")
-        out = self.fails("check")
-        self.assertIn("skill", out)
-        self.assertIn("already used", out)
-
-    def test_skill_in_a_role_lane_needs_its_own_skill_md(self) -> None:
-        (self.repo / "agents" / "roles" / "researcher" / "skills" / "empty-skill").mkdir(parents=True)
+    def test_skill_folder_in_the_flat_lane_needs_its_own_skill_md(self) -> None:
+        (self.repo / "agents" / "skills" / "empty-skill").mkdir(parents=True)
         self.assertIn("no SKILL.md", self.fails("check"))
 
     def test_role_must_equal_its_folder_name(self) -> None:
@@ -353,21 +364,80 @@ class HealthTests(RepoTestCase):
         (self.repo / "agents" / "roles" / "ghost").mkdir()
         self.assertIn("has no ROLE.md", self.fails("check"))
 
-    def test_role_folders_without_skills_are_fine(self) -> None:
-        # builder, orchestrator, planner and scribe keep an empty skills/ folder (.gitkeep).
-        skills = self.repo / "agents" / "roles" / "builder" / "skills"
-        if not skills.is_dir():
-            self.skipTest("builder has no skills/ folder in this project")
-        self.assertEqual([p.name for p in skills.iterdir() if p.is_dir()], [])
-        self.assertTrue((skills / ".gitkeep").is_file())
-        self.ok("check")
+    def test_role_folders_have_no_role_local_skills_folder(self) -> None:
+        for role in sorted(p for p in (self.repo / "agents" / "roles").iterdir() if p.is_dir()):
+            self.assertFalse((role / "skills").exists(), f"{role.name} keeps a role-local skills/ folder")
+        self.ok("check", "--strict")
 
-    def test_role_folder_without_a_skills_folder_is_an_error(self) -> None:
-        src = self.repo / "agents" / "roles" / "builder" / "ROLE.md"
-        dst = self.repo / "agents" / "roles" / "ghost" / "ROLE.md"
-        dst.parent.mkdir()
-        dst.write_text(src.read_text().replace("role: builder", "role: ghost", 1))
-        self.assertIn("has no skills/", self.fails("check"))
+    def test_a_skills_folder_under_a_role_is_an_error(self) -> None:
+        (self.repo / "agents" / "roles" / "builder" / "skills").mkdir()
+        out = self.fails("check")
+        self.assertIn("skills live in agents/skills/", out)
+
+    # --- charter `skills:` list (R2) ---------------------------------------------------------
+    def test_a_charter_may_list_no_skills_but_must_have_the_key(self) -> None:
+        builder = self.repo / "agents" / "roles" / "builder" / "ROLE.md"
+        self.assertIn("skills: []", builder.read_text())
+        self.ok("check", "--strict")
+        builder.write_text(re.sub(r"(?m)^skills: \[\]\n", "", builder.read_text(encoding="utf-8"), count=1),
+                           encoding="utf-8")
+        out = self.fails("check")
+        self.assertIn("missing 'skills'", out)
+
+    def test_charter_skills_must_name_a_flat_skill_folder_once(self) -> None:
+        self.set_skills("builder", ["ghost-skill"])
+        out = self.fails("check")
+        self.assertIn("agents/skills/ghost-skill/SKILL.md does not exist", out)
+        self.set_skills("builder", ["record-decision", "record-decision"])
+        self.assertIn("more than once", self.fails("check"))
+
+    # --- skill front matter and size (R3, R4) ------------------------------------------------
+    def test_skill_fields_outside_the_specification_are_rejected(self) -> None:
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        p.write_text(p.read_text().replace("\n---\n", "\ndisable-model-invocation: true\n---\n", 1))
+        out = self.fails("check")
+        self.assertIn("disable-model-invocation", out)
+        self.assertIn("metadata.invocation", out)
+
+    def test_skill_metadata_keys_and_values_are_checked(self) -> None:
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        original = p.read_text()
+        p.write_text(original.replace("\n---\n", "\nmetadata:\n  requires: anything-else\n---\n", 1))
+        out = self.fails("check")
+        self.assertIn("metadata.requires 'anything-else' is not allowed", out)
+        p.write_text(original.replace("\n---\n", "\nmetadata:\n  bogus: x\n---\n", 1))
+        self.assertIn("metadata key 'bogus' is not allowed", self.fails("check"))
+
+    def test_skill_body_over_40_lines_warns_and_40_does_not(self) -> None:
+        folder = self.repo / "agents" / "skills" / "line-test"
+        folder.mkdir()
+        head = ("---\nname: line-test\n"
+                "description: A body-size fixture. Use when testing the 40-line warning.\n---\n")
+        (folder / "SKILL.md").write_text(head + "\n".join(f"line {i}" for i in range(41)) + "\n", encoding="utf-8")
+        self.ok("sync_agents")
+        out = self.ok("check")
+        self.assertIn("skill-size", out)
+        self.assertIn("41 body lines", out)
+        self.fails("check", "--strict")  # a warning fails --strict
+        (folder / "SKILL.md").write_text(head + "\n".join(f"line {i}" for i in range(40)) + "\n", encoding="utf-8")
+        self.ok("sync_agents")
+        self.assertNotIn("skill-size", self.ok("check"))
+        self.ok("check", "--strict")
+
+    # --- roster Skills column (R7) ------------------------------------------------------------
+    def test_roster_skills_column_links_the_charter_list(self) -> None:
+        self.set_skills("architect", ["record-decision", "write-doc"])
+        self.ok("sync_indexes")
+        self.ok("sync_agents")
+        text = (self.repo / "agents" / "ROSTER.md").read_text(encoding="utf-8")
+        row = next(r for r in text.splitlines() if r.startswith("| [`architect`]"))
+        self.assertIn("[`record-decision`](skills/record-decision/SKILL.md)", row)
+        self.assertIn("[`write-doc`](skills/write-doc/SKILL.md)", row)
+        self.assertLess(row.index("record-decision"), row.index("write-doc"), "charter order is kept")
+        builder = next(r for r in text.splitlines() if r.startswith("| [`builder`]"))
+        self.assertTrue(builder.rstrip().endswith("| — |"), builder)
+        self.ok("sync_indexes", "--check")
+        self.ok("check", "--strict")
 
     def test_default_owner_must_be_a_real_role(self) -> None:
         shutil.rmtree(self.repo / "agents" / "roles" / "scribe")
@@ -883,10 +953,10 @@ class ConditionalScribeTests(RepoTestCase):
         self.assertIn("--owner security", charter)
         # its skill is the method only: no command that moves the item, so nothing is said twice, and it says where
         # the routing is
-        skill = read("agents/roles/reviewer/skills/verify-work/SKILL.md")
+        skill = read("agents/skills/review-work/SKILL.md")
         self.assertNotIn("transition.py", skill)
         self.assertIn("ROLE.md", skill)
-        self.assertIn("verify-work", charter)
+        self.assertIn("review-work", charter)
         self.assertIn("done --by orchestrator", read("agents/roles/orchestrator/ROLE.md"))
         row = next(r for r in read("agents/README.md").splitlines() if r.startswith("| `verified`"))
         self.assertIn("scribe", row)
@@ -1148,6 +1218,19 @@ class ModuleTests(RepoTestCase):
                     again = run(repo, "check", "--strict")
                     self.assertEqual(again.returncode, 0, again.stdout)
 
+    def test_cutting_security_removes_the_role_and_its_flat_skill(self) -> None:
+        if "security" not in _lib.load_modules(self.repo):
+            self.skipTest("security module not installed")
+        preview = self.ok("remove_module", "security")
+        self.assertIn("agents/roles/security", preview)
+        self.assertIn("agents/skills/review-security", preview)
+        self.ok("remove_module", "security", "--apply")
+        self.assertFalse((self.repo / "agents" / "roles" / "security").exists())
+        self.assertFalse((self.repo / "agents" / "skills" / "review-security").exists())
+        self.assertFalse((self.repo / ".claude" / "agents" / "security.md").exists())
+        self.assertFalse((self.repo / ".claude" / "skills" / "review-security").exists())
+        self.ok("check", "--strict")
+
     def test_cutting_every_module_in_turn_leaves_a_healthy_lean_repo(self) -> None:
         modules = list(_lib.load_modules(self.repo))
         for name in modules:
@@ -1192,12 +1275,13 @@ class AdapterTests(RepoTestCase):
         self.assertTrue(agent.is_file())
         self.assertTrue((self.repo / "CLAUDE.md").read_text().strip() == "@AGENTS.md")
         self.assertIn("name: builder", agent.read_text())
-        # A skill that lives under its role still lands flat in .claude/skills/.
-        self.assertTrue((self.repo / ".claude" / "skills" / "verify-work" / "SKILL.md").is_file())
-        shutil.rmtree(self.repo / "agents" / "roles" / "reviewer" / "skills" / "verify-work")
-        (self.repo / "agents" / "roles" / "reviewer" / "skills" / ".gitkeep").write_text("")
+        # A skill from the flat lane lands in .claude/skills/.
+        self.assertTrue((self.repo / ".claude" / "skills" / "review-work" / "SKILL.md").is_file())
+        self.set_skills("reviewer", [])
+        self.ok("sync_indexes")
+        shutil.rmtree(self.repo / "agents" / "skills" / "review-work")
         self.ok("sync_agents")
-        self.assertFalse((self.repo / ".claude" / "skills" / "verify-work").exists())
+        self.assertFalse((self.repo / ".claude" / "skills" / "review-work").exists())
         self.ok("sync_indexes")
         self.ok("check")
 
@@ -1205,11 +1289,11 @@ class AdapterTests(RepoTestCase):
         targets = _lib.load_targets(self.repo)
         if not targets.get("claude", {}).get("enabled"):
             self.skipTest("claude adapter disabled")
-        (self.repo / "agents" / "roles" / "reviewer" / "skills" / "verify-work" / "extra.md").write_text("x\n")
-        (self.repo / ".claude" / "skills" / "verify-work" / "extra.md").write_text("mine\n")
+        (self.repo / "agents" / "skills" / "review-work" / "extra.md").write_text("x\n")
+        (self.repo / ".claude" / "skills" / "review-work" / "extra.md").write_text("mine\n")
         r = self.sh("sync_agents")
         self.assertNotEqual(r.returncode, 0)
-        self.assertEqual((self.repo / ".claude" / "skills" / "verify-work" / "extra.md").read_text(), "mine\n")
+        self.assertEqual((self.repo / ".claude" / "skills" / "review-work" / "extra.md").read_text(), "mine\n")
 
     def test_disabling_the_adapter_removes_generated_files(self) -> None:
         t = self.repo / "agents" / "adapters" / "targets.json"
@@ -1377,11 +1461,11 @@ class AdapterTests(RepoTestCase):
                 continue  # the security module may be cut
             self.assertNotIn("disallowedTools", self.claude_head(role), role)
 
-    # --- a role's own skills are preloaded into its Claude subagent (a subagent preloads only the skills it lists) ---
+    # --- a role's listed skills are preloaded into its Claude subagent (a subagent preloads only the skills it lists) ---
     def test_claude_subagent_preloads_the_roles_own_skills(self) -> None:
         self.set_claude()
         self.ok("sync_agents")
-        self.assertIn("skills:\n  - verify-work\n", self.claude_head("reviewer"))
+        self.assertIn("skills:\n  - review-work\n", self.claude_head("reviewer"))
         self.assertIn("skills:\n  - record-decision\n", self.claude_head("architect"))
         self.ok("sync_agents", "--check")
         self.ok("check", "--strict")
@@ -1399,56 +1483,62 @@ class AdapterTests(RepoTestCase):
             self.skipTest("security module not installed")
         self.set_claude()
         self.ok("sync_agents")
-        self.assertIn("skills:\n  - review-change\n", self.claude_head("security"))
+        self.assertIn("skills:\n  - review-security\n", self.claude_head("security"))
         self.ok("sync_agents", "--check")
         self.ok("check", "--strict")
 
-    def test_shared_skills_are_not_preloaded_into_any_subagent(self) -> None:
+    def test_a_skill_listed_by_two_roles_or_by_none_is_not_preloaded(self) -> None:
+        # Preloading repeats the full text in every subagent that lists it, so one owner is the rule.
         self.set_claude()
+        self.set_skills("orchestrator", ["record-decision"])  # architect and orchestrator now both list it
+        self.ok("sync_indexes")
         self.ok("sync_agents")
-        shared = [p.name for p in (self.repo / "agents" / "skills").iterdir() if p.is_dir()]
-        self.assertIn("write-doc", shared)
-        for role in sorted(p.name for p in (self.repo / "agents" / "roles").iterdir() if p.is_dir()):
-            head = self.claude_head(role)
-            for name in shared:
-                self.assertNotIn(f"- {name}", head, f"{role} preloads the shared skill {name}")
-        # and at the source: the helper files only roles' own skills, nothing under the shared owner ""
+        self.assertNotIn("skills:", self.claude_head("architect"))
+        self.assertNotIn("skills:", self.claude_head("orchestrator"))
         import sync_agents
         preload = sync_agents._preloadable_skills(self.repo)
-        self.assertNotIn("", preload)
-        self.assertFalse(set(shared) & {s for names in preload.values() for s in names})
+        listed = {s for names in preload.values() for s in names}
+        self.assertNotIn("record-decision", listed)
+        self.assertNotIn("write-doc", listed, "write-doc is listed by no charter in P1")
+        self.ok("check", "--strict")
 
     def test_a_role_with_no_skill_gets_no_skills_line(self) -> None:
         self.set_claude()
-        lane = self.repo / "agents" / "roles" / "reviewer" / "skills"
-        shutil.rmtree(lane / "verify-work")
-        (lane / ".gitkeep").write_text("")
+        self.set_skills("reviewer", [])
+        self.ok("sync_indexes")
         self.ok("sync_agents")
         self.assertNotIn("skills:", self.claude_head("reviewer"))
 
     def test_several_role_skills_are_listed_in_name_order(self) -> None:
         self.set_claude()
-        lane = self.repo / "agents" / "roles" / "reviewer" / "skills"
-        (lane / "aaa-extra").mkdir()
-        (lane / "aaa-extra" / "SKILL.md").write_text(
+        folder = self.repo / "agents" / "skills" / "aaa-extra"
+        folder.mkdir()
+        (folder / "SKILL.md").write_text(
             "---\nname: aaa-extra\ndescription: Does a thing. Use when a test needs a second skill.\n---\n# Extra\n")
-        self.ok("sync_agents")
-        self.assertIn("skills:\n  - aaa-extra\n  - verify-work\n", self.claude_head("reviewer"))
+        self.set_skills("reviewer", ["review-work", "aaa-extra"])
         self.ok("sync_indexes")  # a new skill changes the generated roster
+        self.ok("sync_agents")
+        self.assertIn("skills:\n  - aaa-extra\n  - review-work\n", self.claude_head("reviewer"))
         self.ok("check", "--strict")
 
-    def test_a_skill_that_cannot_be_preloaded_is_left_out(self) -> None:
-        # Claude Code does not preload a skill that sets disable-model-invocation, so listing it would be noise
+    def test_invocation_user_skill_is_not_preloaded_and_gets_the_claude_line(self) -> None:
+        # Claude Code does not preload a user-invoked skill; its generated copy gets the adapter flag.
         self.set_claude()
-        p = self.repo / "agents" / "roles" / "reviewer" / "skills" / "verify-work" / "SKILL.md"
-        p.write_text(p.read_text().replace("\n---\n", "\ndisable-model-invocation: true\n---\n", 1))
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        p.write_text(p.read_text().replace("\n---\n", "\nmetadata:\n  invocation: user\n---\n", 1))
         self.ok("sync_agents")
         self.assertNotIn("skills:", self.claude_head("reviewer"))
+        generated = (self.repo / ".claude" / "skills" / "review-work" / "SKILL.md").read_text()
+        head = generated.split("---\n", 2)[1]
+        self.assertEqual(head.strip().splitlines()[-1], "disable-model-invocation: true")
+        self.assertNotIn("disable-model-invocation", p.read_text())
+        self.ok("check", "--strict")
+        self.ok("sync_agents", "--check")
 
     def test_a_skill_with_broken_front_matter_does_not_crash_the_sync(self) -> None:
         self.set_claude()
-        p = self.repo / "agents" / "roles" / "reviewer" / "skills" / "verify-work" / "SKILL.md"
-        p.write_text("---\nname: verify-work\n  nested: [broken\n---\n# Verify work\n")
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        p.write_text("---\nname: review-work\n  nested: [broken\n---\n# Review work\n")
         r = self.sh("sync_agents")
         self.assertNotIn("Traceback", r.stdout + r.stderr)
         self.assertIn("skill", self.fails("check"))

@@ -2,6 +2,7 @@
 role: scribe
 mission: Keep the docs and changelog true, findable and in the right Diátaxis quadrant after every change.
 reads: [AGENTS.md, docs/INDEX.md, "work/items/<id>/", "work/items/<id>.md", CHANGELOG.md]
+skills: []
 item_files: []
 writes_files: [CHANGELOG.md]
 never: [change code, change an accepted ADR's decision, leave a doc without a summary, document something unverified]

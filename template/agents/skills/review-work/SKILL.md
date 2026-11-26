@@ -1,5 +1,5 @@
 ---
-name: verify-work
+name: review-work
 description: Independently verifies a finished work item against its brief and writes review.md with evidence. Use when acting as the reviewer, or when asked to review, verify, or sign off on work someone else built.
 ---
 # Verify work

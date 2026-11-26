@@ -156,28 +156,59 @@ def test_custom_profile_picks_exactly_the_chosen_modules(tmp_path, modules):
     assert r.returncode == 0, r.stderr
     for module, path in MODULE_PATHS.items():
         assert (dest / path).exists() == (module in modules), module
-    # the security role is a whole bundle folder (charter + skills/): cutting the module removes all of it
+    # the security bundle is the role folder plus its flat skill: cutting the module removes both
     assert (dest / "agents" / "roles" / "security").exists() == ("security" in modules)
+    assert (dest / "agents" / "skills" / "review-security").exists() == ("security" in modules)
+    assert (dest / ".claude" / "agents" / "security.md").exists() == ("security" in modules)
+    assert (dest / ".claude" / "skills" / "review-security").exists() == ("security" in modules)
     assert py(dest, "tools/check.py", "--strict").returncode == 0
 
 
-def test_every_role_is_a_bundle_with_a_skills_folder(full):
+def test_every_role_is_a_charter_without_a_skills_folder(full):
     roles = full / "agents" / "roles"
     bundles = sorted(p for p in roles.iterdir() if p.is_dir())
     assert bundles, "no role folders"
     for b in bundles:
         assert (b / "ROLE.md").is_file(), f"{b.name} has no ROLE.md"
-        assert (b / "skills").is_dir(), f"{b.name} has no skills/ folder (keep an empty one with .gitkeep)"
+        assert not (b / "skills").exists(), f"{b.name} has a role-local skills/ folder; skills live flat in agents/skills/"
     flat = [p.name for p in roles.glob("*.md") if p.name.lower() != "readme.md"]
     assert not flat, f"flat role files left behind: {flat}"
 
 
-def test_roster_lists_role_and_shared_skills(full):
+P1_SKILLS = {
+    "architect": ["record-decision"],
+    "builder": [],
+    "orchestrator": [],
+    "planner": [],
+    "researcher": ["research-question"],
+    "reviewer": ["review-work"],
+    "scribe": [],
+    "security": ["review-security"],
+}
+
+
+def test_roster_skills_column_follows_each_charter(full):
     text = (full / "agents" / "ROSTER.md").read_text(encoding="utf-8")
-    assert "roles/reviewer/skills/verify-work/SKILL.md" in text, "role-exclusive skill missing from roster"
-    assert "skills/write-doc/SKILL.md" in text, "shared skill missing from roster"
-    assert "Shared skills (any role)" in text
-    assert "roles/scribe/skills/write-doc" not in text, "write-doc is shared, not scribe-only"
+    assert "| Role | Mission | Owns (exclusive writes) | Item files | Skills |" in text
+    assert "Shared skills (any role)" not in text, "there is one flat skills folder, not a shared lane"
+    for role, skills in P1_SKILLS.items():
+        row = next(r for r in text.splitlines() if r.startswith(f"| [`{role}`]"))
+        cells = [c.strip() for c in row.split("|")]
+        expected = ", ".join(f"[`{s}`](skills/{s}/SKILL.md)" for s in skills) or "—"
+        assert cells[-2] == expected, f"{role}: {cells[-2]!r} != {expected!r}"
+        assert f"roles/{role}/skills" not in row
+
+
+def test_skills_have_one_source(full):
+    stray = [
+        p.relative_to(TEMPLATE / "template").as_posix()
+        for p in (TEMPLATE / "template").rglob("SKILL.md")
+        if not re.fullmatch(r"agents/skills/[^/]+/SKILL\.md", p.relative_to(TEMPLATE / "template").as_posix())
+    ]
+    assert not stray, f"SKILL.md outside agents/skills/<name>/: {stray}"
+    source = {p.name for p in (full / "agents" / "skills").iterdir() if p.is_dir()}
+    generated = {p.name for p in (full / ".claude" / "skills").iterdir() if p.is_dir()}
+    assert source == generated, f"generated skills differ: source-only {source - generated}, generated-only {generated - source}"
 
 
 _COMMAND_RE = re.compile(r"python3 tools/\w+\.py[^`\n]*")
@@ -188,14 +219,25 @@ def _commands(text: str) -> set[str]:
     return {re.sub(r"\s+", " ", m.group(0)).strip().rstrip(".,;:)") for m in _COMMAND_RE.finditer(text)}
 
 
+def _charter_skills(role_dir: Path) -> list[str]:
+    """The skill names in a charter's inline `skills:` list."""
+    text = (role_dir / "ROLE.md").read_text(encoding="utf-8")
+    m = re.search(r"^skills:\s*\[(.*)\]\s*$", text, re.M)
+    if not m:
+        return []
+    return [s.strip().strip("'\"") for s in m.group(1).split(",") if s.strip()]
+
+
 def repeated_commands(role_dir: Path) -> dict[str, set[str]]:
-    """For each skill of one role: the commands that the role's charter body also contains."""
+    """For each skill one role's charter lists: the commands that the charter body also contains."""
     charter = (role_dir / "ROLE.md").read_text(encoding="utf-8").split("\n---\n", 1)[1]
     in_charter = _commands(charter)
+    skills_root = role_dir.parents[1] / "skills"
     out: dict[str, set[str]] = {}
-    for skill in sorted(p for p in (role_dir / "skills").glob("*") if p.is_dir()):
+    for name in _charter_skills(role_dir):
+        skill = skills_root / name
         text = "\n".join(f.read_text(encoding="utf-8") for f in sorted(skill.rglob("*.md")))
-        out[skill.name] = in_charter & _commands(text)
+        out[name] = in_charter & _commands(text)
     return out
 
 
@@ -210,22 +252,24 @@ def test_a_role_and_its_own_skills_never_repeat_a_command(full):
 
 
 def test_the_repeat_check_sees_a_repeated_command_and_nothing_else(tmp_path):
-    role = tmp_path / "r"
-    (role / "skills" / "s").mkdir(parents=True)
-    (role / "skills" / "s" / "references").mkdir()
+    role = tmp_path / "agents" / "roles" / "r"
+    skill = tmp_path / "agents" / "skills" / "s"
+    skill.mkdir(parents=True)
+    (skill / "references").mkdir()
+    role.mkdir(parents=True)
     (role / "ROLE.md").write_text(
-        "---\nrole: r\n---\n# R\n\nHand over with `python3 tools/transition.py <id> --owner x --next \"go\"`.\n"
+        "---\nrole: r\nskills: [s]\n---\n# R\n\nHand over with `python3 tools/transition.py <id> --owner x --next \"go\"`.\n"
         "Then run `python3 tools/check.py`.\n", encoding="utf-8")
-    (role / "skills" / "s" / "SKILL.md").write_text(
+    (skill / "SKILL.md").write_text(
         "---\nname: s\n---\n# S\n\n```\npython3 tools/transition.py <id> --owner x --next \"go\"\n```\n", encoding="utf-8")
     assert repeated_commands(role) == {"s": {'python3 tools/transition.py <id> --owner x --next "go"'}}
     # the same script with other flags is another command; so is a command only in the skill
-    (role / "skills" / "s" / "SKILL.md").write_text(
+    (skill / "SKILL.md").write_text(
         "---\nname: s\n---\n# S\n\n`python3 tools/transition.py <id> --owner y`\n`python3 tools/item_file.py <id> review`\n",
         encoding="utf-8")
     assert repeated_commands(role) == {"s": set()}
     # a repeat that lives in the skill's references/ counts too
-    (role / "skills" / "s" / "references" / "more.md").write_text("Run `python3 tools/check.py`.\n", encoding="utf-8")
+    (skill / "references" / "more.md").write_text("Run `python3 tools/check.py`.\n", encoding="utf-8")
     assert repeated_commands(role) == {"s": {"python3 tools/check.py"}}
 
 
@@ -289,7 +333,7 @@ def test_template_name_is_consistent():
 def test_root_only_copier_excludes_are_anchored():
     text = (TEMPLATE / "copier.yml").read_text(encoding="utf-8")
     for path in ("docs/product", "docs/operations", "docs/security", "SECURITY.md",
-                 "agents/roles/security", "work/_templates/security-review.md", "docs/release",
+                 "agents/roles/security", "agents/skills/review-security", "work/_templates/security-review.md", "docs/release",
                  "infra", "agents/evals", ".github", "apps", "packages"):
         assert f'/{path}' in text, path
 
@@ -609,7 +653,8 @@ def test_copier_update_merges_improvements_and_respects_cuts(tmp_path):
 
 def test_front_matter_parser_agrees_with_a_real_yaml_parser(full):
     """Our stdlib parser must accept exactly what PyYAML accepts, with the same values, so files
-    that pass tools/check.py also render on GitHub and open in other tools."""
+    that pass tools/check.py also render on GitHub and open in other tools. Skills pass the one-level
+    `metadata:` map keys, so the merge-work front matter is compared as the dict PyYAML builds."""
     yaml = pytest.importorskip("yaml")
     import datetime
     sys.path.insert(0, str(full / "tools"))
@@ -631,7 +676,7 @@ def test_front_matter_parser_agrees_with_a_real_yaml_parser(full):
             rel = p.relative_to(full).as_posix()
             try:
                 real = {k: norm(v) for k, v in (yaml.safe_load(m.group(1)) or {}).items()}
-                mine, _ = _lib.parse_front_matter(text)
+                mine, _ = _lib.parse_front_matter(text, _lib.SKILL_MAP_KEYS)
             except Exception as e:  # either parser rejecting is a defect in a shipped file
                 problems.append(f"{rel}: {type(e).__name__}: {e}")
                 continue

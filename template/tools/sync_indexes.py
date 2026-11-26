@@ -8,7 +8,7 @@ Outputs (deterministic, so `--check` can detect drift):
   docs/dev/reference/repo-map.md top-level folders and workspace components, from each folder README `summary`
   docs/dev/reference/modules.md  installed modules and how to cut them
   work/ACTIVE.md             board of in-flight work items, from handoff front matter
-  agents/ROSTER.md           roles, their skills, ownership and item files, from agents/roles/<role>/ROLE.md
+  agents/ROSTER.md           roles, the skills each lists, ownership and item files, from agents/roles/<role>/ROLE.md
 
 Usage: python3 tools/sync_indexes.py [--check]
 """
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _lib import (  # noqa: E402
     DOCS_FOLDER_AUDIENCE, GENERATED_BANNER, SKIP_DIRS, TYPE_FOLDERS, TYPED_AUDIENCE_DIRS, FrontMatterError,
     doc_audience, doc_type_dir, folder_owners, iter_docs, iter_items, load_modules, load_roles,
-    parse_front_matter, read_fm, read_text, repo_root, skill_folders, write_text,
+    parse_front_matter, read_fm, read_text, repo_root, write_text,
 )
 
 SPLIT_THRESHOLD = 40
@@ -346,26 +346,17 @@ def build_roster(root: Path) -> str:
     owned: dict[str, list[str]] = {}
     for folder, role in sorted(owners.items()):
         owned.setdefault(role, []).append(f"`{folder}/`" if folder else "`/`")
-    role_skills: dict[str, list[str]] = {}
-    shared_skills: list[str] = []
-    for owner, skill in skill_folders(root):
-        if not (skill / "SKILL.md").is_file():
-            continue
-        if owner:
-            role_skills.setdefault(owner, []).append(skill.name)
-        else:
-            shared_skills.append(skill.name)
     lines = [
         _front("Agent roster", "reference",
-               "Generated table of agent roles, their exclusive skills, what each owns, and which work-item files each writes.",
+               "Generated table of agent roles, the skills each lists, what each owns, and which work-item files each writes.",
                "architect"),
         "# Agent roster",
         "",
         "Ownership comes from each folder README's `owner_role` (nearest ancestor wins) plus each role's `ROLE.md` in `roles/<role>/`.",
-        "Exclusive skills live under the role that uses them; shared skills are listed after the table.",
+        "A role's skills are the ones its charter lists in `skills:`; every skill lives in `skills/<name>/`.",
         "Dispatch rule: `protocols/handoff.md`.",
         "",
-        "| Role | Mission | Owns (exclusive writes) | Item files | Exclusive skills |",
+        "| Role | Mission | Owns (exclusive writes) | Item files | Skills |",
         "|---|---|---|---|---|",
     ]
     for name, r in sorted(roles.items()):
@@ -373,11 +364,9 @@ def build_roster(root: Path) -> str:
         own = list(owned.get(name, []))
         own += [f"`{f}`" for f in (fm.get("writes_files") or [])]
         items = ", ".join(f"`{f}`" for f in (fm.get("item_files") or [])) or "—"
-        skills = ", ".join(f"[`{s}`](roles/{name}/skills/{s}/SKILL.md)" for s in role_skills.get(name, [])) or "—"
+        listed = fm.get("skills")
+        skills = ", ".join(f"[`{s}`](skills/{s}/SKILL.md)" for s in (listed if isinstance(listed, list) else [])) or "—"
         lines.append(f"| [`{name}`](roles/{name}/ROLE.md) | {fm.get('mission', '(missing)')} | {', '.join(own) or '—'} | {items} | {skills} |")
-    if shared_skills:
-        links = ", ".join(f"[`{s}`](skills/{s}/SKILL.md)" for s in shared_skills)
-        lines += ["", f"Shared skills (any role): {links}."]
     return "\n".join(lines) + "\n"
 
 

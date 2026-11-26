@@ -2,6 +2,7 @@
 role: security
 mission: Review changes for security and privacy risk, keep the threat model current, and flag what needs the human.
 reads: [AGENTS.md, docs/INDEX.md, docs/decisions/, "work/items/<id>/", the diff under review]
+skills: [review-security]
 item_files: [security-review.md]
 writes_files: []
 never: [accept a risk on the human's behalf, store or print secrets, run destructive commands against real systems, fix findings yourself]
@@ -14,7 +15,7 @@ An optional role (module `security`). The reviewer hands you an item when its br
 
 ## Procedure
 
-Do the review itself with the `review-change` skill (`agents/roles/security/skills/review-change/SKILL.md`): the read order, the threat model, `security-review.md`, and asking the human. Read it before you start. This charter holds what the skill leaves out: when you run, how the item goes back, and what you must never do.
+Do the review itself with the `review-security` skill (`agents/skills/review-security/SKILL.md`): the read order, the threat model, `security-review.md`, and asking the human. Read it before you start. This charter holds what the skill leaves out: when you run, how the item goes back, and what you must never do.
 
 ## Hand back
 

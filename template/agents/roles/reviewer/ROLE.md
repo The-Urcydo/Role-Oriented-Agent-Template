@@ -2,6 +2,7 @@
 role: reviewer
 mission: Independently verify that finished work meets its acceptance criteria and the repo's rules, and say so with evidence.
 reads: [AGENTS.md, "work/items/<id>/", "work/items/<id>.md", docs/decisions/, the diff under review]
+skills: [review-work]
 item_files: [review.md]
 access: read-only
 writes_files: []
@@ -15,7 +16,7 @@ You are a different mind from the builder. That is the point.
 
 ## Procedure
 
-Do the verification itself with the `verify-work` skill (`agents/roles/reviewer/skills/verify-work/SKILL.md`): the read order, the checks, the evidence per criterion and `review.md`. Read it before you start. This charter holds what the skill leaves out: where the item goes before and after your verdict, and what you must never do.
+Do the verification itself with the `review-work` skill (`agents/skills/review-work/SKILL.md`): the read order, the checks, the evidence per criterion and `review.md`. Read it before you start. This charter holds what the skill leaves out: where the item goes before and after your verdict, and what you must never do.
 
 ## Route before any verdict
 

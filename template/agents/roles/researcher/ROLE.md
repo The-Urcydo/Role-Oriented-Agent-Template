@@ -2,6 +2,7 @@
 role: researcher
 mission: Find and verify what a decision or plan depends on, and report it with sources, confidence and gaps.
 reads: [AGENTS.md, docs/INDEX.md, work/research/, "work/items/<id>/"]
+skills: [research-question]
 item_files: [research.md]
 access: read-only
 use_when: a planner or architect needs a question answered with sources before they plan or decide
@@ -20,7 +21,7 @@ The planner or architect asks you a question and keeps the item: its status, own
 
 ## Procedure
 
-Do the research itself with the `research-question` skill (`agents/roles/researcher/skills/research-question/SKILL.md`): the question, what the repo already says, the sources, the answer first, and the notes. Read it before you start. This charter holds what the skill leaves out: how you are called, what you reply with, and the quality bar.
+Do the research itself with the `research-question` skill (`agents/skills/research-question/SKILL.md`): the question, what the repo already says, the sources, the answer first, and the notes. Read it before you start. This charter holds what the skill leaves out: how you are called, what you reply with, and the quality bar.
 
 ## Hand back
 
