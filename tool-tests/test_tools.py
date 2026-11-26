@@ -176,6 +176,18 @@ class FrontMatterTests(unittest.TestCase):
         # a one-level map holds strings only: a list value is refused
         with self.assertRaises(_lib.FrontMatterError):
             _lib.parse_front_matter("---\nmetadata:\n  invocation: [user]\n---\n", _lib.SKILL_MAP_KEYS)
+        # inline metadata maps remain invalid even for skills
+        with self.assertRaises(_lib.FrontMatterError):
+            _lib.parse_front_matter("---\nmetadata: {invocation: user}\n---\n", _lib.SKILL_MAP_KEYS)
+
+    def test_allowed_tools_map_exception_is_skill_only(self) -> None:
+        for value in ("{Read: true}", "\n  Read: true\n  Grep: true"):
+            with self.subTest(value=value):
+                text = f"---\nrole: r\nallowed-tools: {value}\n---\n"
+                with self.assertRaises(_lib.FrontMatterError):
+                    _lib.parse_front_matter(text)
+                fm, _ = _lib.parse_front_matter(text, _lib.SKILL_MAP_KEYS)
+                self.assertEqual(fm["allowed-tools"], {})
 
     def test_set_value_replaces_and_inserts(self) -> None:
         text = "---\nstatus: draft\nevidence:\n- old\nz: 1\n---\nbody\n"
@@ -521,7 +533,7 @@ class HealthTests(RepoTestCase):
     def test_skill_allowed_tools_must_be_a_space_separated_string(self) -> None:
         p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
         original = p.read_text(encoding="utf-8")
-        for value in ("[Read, Grep]", "{Read: true}", "\n  Read: true"):
+        for value in ("[Read, Grep]", "{Read: true}", "\n  Read: true", "\n  Read: true\n  Grep: true"):
             with self.subTest(value=value):
                 p.write_text(original.replace("description:", f"allowed-tools: {value}\ndescription:", 1),
                              encoding="utf-8")
@@ -552,6 +564,19 @@ class HealthTests(RepoTestCase):
         p.write_text(original + "\n[project](../../../README.md)\n", encoding="utf-8")
         self.ok("sync_agents")
         self.assertNotIn("skill-portable", self.ok("check", "--strict"))
+
+    def test_malformed_metadata_does_not_suppress_portability_errors(self) -> None:
+        p = self.repo / "agents" / "skills" / "write-skill" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        p.write_text(original.replace("description:", "metadata: user\ndescription:", 1) +
+                     "\n[project](../../../README.md)\n", encoding="utf-8")
+        r = self.sh("check")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        out = r.stdout + r.stderr
+        self.assertIn("metadata must hold indented `key: value` lines", out)
+        self.assertIn("skill-portable", out)
+        self.assertIn("../../../README.md", out)
+        self.assertNotIn("Traceback", out)
 
     def test_portable_skills_may_link_to_an_existing_reference(self) -> None:
         p = self.repo / "agents" / "skills" / "write-skill" / "SKILL.md"

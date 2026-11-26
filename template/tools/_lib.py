@@ -271,11 +271,11 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
                     raise FrontMatterError(f"line {offset}: list item under scalar key '{key}'")
                 data[key].append(_scalar(_strip_comment(stripped[1:].strip())))
                 continue
-            if key == "allowed-tools" and KEY_RE.match(stripped):
-                if data.get(key) is not None:
+            if key == "allowed-tools" and key in map_keys and KEY_RE.match(stripped):
+                if data.get(key) is not None and not isinstance(data.get(key), dict):
                     raise FrontMatterError(f"line {offset}: nested structures are not supported")
-                # Preserve the mapping shape so check_skills can give field-specific guidance.
-                # Key/value parsing stays strict, so malformed YAML still fails normally.
+                # Preserve every mapping entry's shape so check_skills can give field-specific guidance.
+                # Parse scalar values strictly so malformed YAML still fails normally.
                 data[key] = {}
                 _, rest = stripped.split(":", 1)
                 _scalar(rest.strip())
@@ -306,7 +306,7 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
         if rest == "":
             data[key] = None
         elif rest.startswith("{") and rest.endswith("}"):
-            if key == "allowed-tools":
+            if key == "allowed-tools" and key in map_keys:
                 data[key] = {}  # a mapping, so the skill check can give the field-specific fix
             else:
                 _guard_plain(rest)
@@ -521,7 +521,7 @@ def load_roles(root: Path) -> dict[str, dict[str, Any]]:
 
 
 SKILLS_DIR = "agents/skills"
-SKILL_MAP_KEYS = ("metadata",)
+SKILL_MAP_KEYS = ("metadata", "allowed-tools")
 # `metadata` keys a skill may carry, with the values each may take (Agent Skills spec: metadata is a string map).
 SKILL_METADATA = {"invocation": ("user",), "requires": ("work-tracker",)}
 

@@ -515,7 +515,7 @@ def check_skills(root: Path, rep: Report) -> None:
                 if "<fill" in line or SKILL_STUB_RE.match(line):
                     rep.warn("skill-stub", f"{rel(root, p)}:{number}",
                              "unfinished skill text; fill it in or delete the skill")
-        if meta is None or (isinstance(meta, dict) and "requires" not in meta):
+        if not isinstance(meta, dict) or "requires" not in meta:
             for p in sources:
                 for line, target in md_links(read_text(p)):
                     path = target.split("#", 1)[0]
