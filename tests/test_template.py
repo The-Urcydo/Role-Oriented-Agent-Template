@@ -88,6 +88,10 @@ def tree(project: Path) -> dict[str, str]:
     return out
 
 
+def file_bytes(project: Path) -> dict[str, bytes]:
+    return {p.relative_to(project).as_posix(): p.read_bytes() for p in project.rglob("*") if p.is_file()}
+
+
 def test_copier_floor_agrees_between_copier_yml_and_requirements():
     """The two places that pin the minimum Copier must not drift."""
     min_version = re.search(r'^_min_copier_version:\s*"([^"]+)"',
@@ -222,6 +226,28 @@ def test_skills_have_one_source(full):
     source = {p.name for p in (full / "agents" / "skills").iterdir() if p.is_dir()}
     generated = {p.name for p in (full / ".claude" / "skills").iterdir() if p.is_dir()}
     assert source == generated, f"generated skills differ: source-only {source - generated}, generated-only {generated - source}"
+
+
+def test_installer_output_equals_the_template_skills(tmp_path):
+    installer = TEMPLATE / "template" / "tools" / "install_skills.py"
+    project = tmp_path / "project"
+    project.mkdir()
+    r = subprocess.run(
+        [sys.executable, str(installer), "--target", "agents", "--all", "--include-tracker-bound",
+         "--project", str(project)],
+        cwd=TEMPLATE, capture_output=True, text=True, timeout=120,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert file_bytes(project / ".agents" / "skills") == file_bytes(TEMPLATE / "template" / "agents" / "skills")
+
+
+def test_installer_claude_output_equals_a_generated_projects_claude_skills(full, tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    r = py(full, "tools/install_skills.py", "--target", "claude", "--all", "--include-tracker-bound",
+           "--project", str(project))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert file_bytes(project / ".claude" / "skills") == file_bytes(full / ".claude" / "skills")
 
 
 _COMMAND_RE = re.compile(r"python3 tools/\w+\.py[^`\n]*")
