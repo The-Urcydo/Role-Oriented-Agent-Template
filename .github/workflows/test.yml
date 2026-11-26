@@ -25,12 +25,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - python-version: "3.12"
+          - python-version: "3.13"
             copier-version: latest
             experimental: false
           # The lowest directly supported Copier comes from requirements-dev.txt, not a hard-coded pin here.
           # It shares the job name with the latest leg so ci-gate and the ruleset need no change.
-          - python-version: "3.12"
+          - python-version: "3.13"
             copier-version: floor
             experimental: false
           - python-version: "3.14"

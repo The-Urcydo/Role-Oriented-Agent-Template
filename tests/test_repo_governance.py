@@ -14,7 +14,7 @@ The ruleset itself lives in GitHub, not in this repo, so it cannot be read here.
 below record the names it requires.
 
 Every check is a function that takes a repo root and returns a list of problems, so the same
-checks run on the real repo and on mutated copies (see the last tests). Python 3.12 compatible.
+checks run on the real repo and on mutated copies (see the last tests). Python 3.13 compatible.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ END_DATE = "2027-02-17"
 
 # The ruleset `protect-main` requires `ci-gate`; this set must track test.yml. If a check below fails
 # because the job names changed, change the ruleset (GitHub settings) first or together with the workflow.
-EXPECTED_CI_CHECKS = {"template (3.12)", "template (3.14)", "template (3.15)", "ci-gate"}
+EXPECTED_CI_CHECKS = {"template (3.13)", "template (3.14)", "template (3.15)", "ci-gate"}
 
 VERSION_PLACEHOLDER = "${{ matrix.python-version }}"
 # Every problem that means "a file could not be read or understood" starts with this, as opposed to "two

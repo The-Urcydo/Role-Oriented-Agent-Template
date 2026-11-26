@@ -1,4 +1,4 @@
-"""Shared helpers for the repo tooling. Standard library only (Python 3.12+).
+"""Shared helpers for the repo tooling. Standard library only (Python 3.13+).
 
 Design rules for everything in tools/:
 - No third-party dependencies, so an agent can always just run `python3 tools/<x>.py`.
@@ -14,10 +14,24 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+
+# The one place the minimum Python is declared. Every tool imports this module before it does anything else, so a
+# too-old interpreter stops here with one clear line. tests/test_supported_versions.py checks the CI matrix and the
+# docs against this value; tool-tests/test_tools.py checks that every tool stops here.
+MIN_PYTHON = (3, 13)
+if sys.version_info < MIN_PYTHON:
+    sys.stderr.write(
+        f"error: these tools need Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or newer; this is Python "
+        f"{sys.version.split()[0]} ({sys.executable}). Run them with a newer Python, for example: "
+        f"uv run --python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} python {sys.argv[0] or 'tools/check.py'}. "
+        f"If this appeared during `copier copy`, start Copier with that Python: "
+        f"uvx --python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} copier copy <template> <folder>\n")
+    raise SystemExit(2)
 
 TOOLS_DIR = Path(__file__).resolve().parent
 
