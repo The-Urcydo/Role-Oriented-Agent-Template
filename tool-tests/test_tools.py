@@ -1864,6 +1864,354 @@ class PreCommitHookTests(RepoTestCase):
         self.assertIn("hooks:\n    git config core.hooksPath .githooks", recipe)
 
 
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def run_library_tool(tool: str, root: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(ROOT / "tools" / f"{tool}.py"), "--root", str(root), *args],
+        cwd=root, env={**os.environ, "REPO_ROOT": str(root)}, capture_output=True, text=True, timeout=120,
+    )
+
+
+def file_bytes(root: Path) -> dict[str, bytes]:
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+class InstallSkillsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name) / "library"
+        self.project = Path(self._tmp.name) / "project"
+        (self.root / "agents" / "skills").mkdir(parents=True)
+        self.project.mkdir()
+
+    def skill(self, name: str, metadata: str = "") -> Path:
+        folder = self.root / "agents" / "skills" / name
+        write(folder / "SKILL.md", f"---\nname: {name}\ndescription: Does a thing. Use when testing.\n{metadata}---\n# Example\n")
+        return folder
+
+    def install(self, target: str, *args: str) -> subprocess.CompletedProcess:
+        return run_library_tool(
+            "install_skills", self.root, "--target", target, "--project", str(self.project), *args,
+        )
+
+    def test_copies_the_whole_skill_folder(self) -> None:
+        source = self.skill("example-skill")
+        write(source / "references" / "notes.md", "note\n")
+        write(source / "scripts" / "run.sh", "echo ok\n")
+        write(source / "__pycache__" / "cache.pyc", "ignored\n")
+        write(source / ".DS_Store", "ignored\n")
+        result = self.install("claude", "--skill", "example-skill")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        dest = self.project / ".claude" / "skills" / "example-skill"
+        self.assertFalse(dest.is_symlink())
+        expected = {
+            rel: data for rel, data in file_bytes(source).items()
+            if "__pycache__" not in Path(rel).parts and Path(rel).suffix != ".pyc" and Path(rel).name != ".DS_Store"
+        }
+        self.assertEqual(file_bytes(dest), expected)
+        self.assertEqual(result.stdout.strip(), "installed example-skill -> .claude/skills/example-skill")
+
+    def test_three_targets(self) -> None:
+        self.skill("example-skill")
+        for target, relative in {
+            "claude": ".claude/skills",
+            "opencode": ".opencode/skills",
+            "agents": ".agents/skills",
+        }.items():
+            with self.subTest(target=target):
+                result = self.install(target, "--skill", "example-skill")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((self.project / relative / "example-skill" / "SKILL.md").is_file())
+
+    def test_all_refuses_existing_until_force(self) -> None:
+        self.skill("example-skill")
+        first = self.install("claude", "--all")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        source = self.root / "agents" / "skills" / "example-skill" / "SKILL.md"
+        source.write_text(source.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8")
+        installed = self.project / ".claude" / "skills" / "example-skill" / "SKILL.md"
+        skipped = self.install("claude", "--all")
+        self.assertEqual(skipped.returncode, 1)
+        self.assertIn("skipped example-skill:", skipped.stdout)
+        self.assertNotIn("changed", installed.read_text(encoding="utf-8"))
+        forced = self.install("claude", "--all", "--force")
+        self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
+        self.assertIn("changed", installed.read_text(encoding="utf-8"))
+
+    def test_dry_run_writes_nothing(self) -> None:
+        self.skill("example-skill")
+        result = self.install("claude", "--skill", "example-skill", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("would install example-skill -> .claude/skills/example-skill", result.stdout)
+        self.assertFalse((self.project / ".claude").exists())
+
+    def test_dry_run_on_an_existing_destination_fails(self) -> None:
+        self.skill("example-skill")
+        installed = self.project / ".claude" / "skills" / "example-skill" / "SKILL.md"
+        write(installed, "old\n")
+        result = self.install("claude", "--skill", "example-skill", "--dry-run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("would skip example-skill:", result.stdout)
+        self.assertEqual(installed.read_text(encoding="utf-8"), "old\n")
+
+    def test_all_with_skill_and_include_without_all_are_usage_errors(self) -> None:
+        for args in (("--all", "--skill", "example-skill"), ("--skill", "example-skill", "--include-tracker-bound")):
+            with self.subTest(args=args):
+                result = self.install("claude", *args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("error:", result.stderr)
+
+    def test_all_on_an_empty_or_fully_bound_library_fails(self) -> None:
+        empty = self.install("claude", "--all")
+        self.assertEqual(empty.returncode, 1)
+        self.assertIn("no portable skills to install (use --include-tracker-bound or --skill)", empty.stderr)
+        self.skill("bound", "metadata:\n  requires: work-tracker\n")
+        bound = self.install("claude", "--all")
+        self.assertEqual(bound.returncode, 1)
+        self.assertIn("no portable skills to install", bound.stderr)
+        self.assertFalse((self.project / ".claude").exists())
+
+    def test_unknown_skill_lists_available_names(self) -> None:
+        self.skill("alpha")
+        self.skill("beta")
+        result = self.install("claude", "--skill", "missing")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown skill(s): missing", result.stderr)
+        self.assertIn("available: alpha, beta", result.stderr)
+
+    def test_force_replaces_a_file_destination(self) -> None:
+        self.skill("example-skill")
+        dest = self.project / ".claude" / "skills" / "example-skill"
+        write(dest, "old\n")
+        result = self.install("claude", "--skill", "example-skill", "--force")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(dest.is_dir())
+        self.assertTrue((dest / "SKILL.md").is_file())
+
+    def test_force_replaces_a_symlink_destination_without_touching_its_target(self) -> None:
+        self.skill("example-skill")
+        target = Path(self._tmp.name) / "target"
+        target.mkdir()
+        write(target / "keep.txt", "keep\n")
+        dest = self.project / ".claude" / "skills" / "example-skill"
+        dest.parent.mkdir(parents=True)
+        try:
+            dest.symlink_to(target, target_is_directory=True)
+        except OSError:
+            self.skipTest("symlinks are not available")
+        result = self.install("claude", "--skill", "example-skill", "--force")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(dest.is_symlink())
+        self.assertTrue((dest / "SKILL.md").is_file())
+        self.assertEqual((target / "keep.txt").read_text(encoding="utf-8"), "keep\n")
+
+    def test_copy_failure_preserves_the_existing_install(self) -> None:
+        source = self.skill("example-skill")
+        try:
+            (source / "broken-link").symlink_to("/nonexistent/target")
+        except OSError:
+            self.skipTest("symlinks are not available")
+        dest = self.project / ".claude" / "skills" / "example-skill"
+        write(dest / "SKILL.md", "old\n")
+        result = self.install("claude", "--skill", "example-skill", "--force")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("skipped example-skill:", result.stdout)
+        self.assertEqual((dest / "SKILL.md").read_text(encoding="utf-8"), "old\n")
+        self.assertEqual(list(dest.parent.glob(".example-skill.*")), [])
+
+    def test_all_continues_after_a_copy_failure(self) -> None:
+        broken = self.skill("a-broken")
+        self.skill("b-good")
+        try:
+            (broken / "broken-link").symlink_to("/nonexistent/target")
+        except OSError:
+            self.skipTest("symlinks are not available")
+        result = self.install("claude", "--all", "--force")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("skipped a-broken:", result.stdout)
+        self.assertIn("installed b-good ->", result.stdout)
+        self.assertTrue((self.project / ".claude" / "skills" / "b-good" / "SKILL.md").is_file())
+        self.assertFalse((self.project / ".claude" / "skills" / "a-broken").exists())
+        self.assertEqual(list((self.project / ".claude" / "skills").glob(".*")), [])
+
+    def test_default_all_skips_metadata_requires(self) -> None:
+        self.skill("portable")
+        self.skill("tracker-bound", "metadata:\n  requires: work-tracker\n")
+        result = self.install("agents", "--all")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = self.project / ".agents" / "skills"
+        self.assertTrue((installed / "portable" / "SKILL.md").is_file())
+        self.assertFalse((installed / "tracker-bound").exists())
+        self.assertEqual(result.stderr, "")
+
+    def test_include_tracker_bound_installs_both(self) -> None:
+        self.skill("portable")
+        self.skill("tracker-bound", "metadata:\n  requires: work-tracker\n")
+        result = self.install("agents", "--all", "--include-tracker-bound")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = self.project / ".agents" / "skills"
+        self.assertTrue((installed / "portable" / "SKILL.md").is_file())
+        self.assertTrue((installed / "tracker-bound" / "SKILL.md").is_file())
+
+    def test_explicit_tracker_bound_skill_installs_with_a_portability_note(self) -> None:
+        self.skill("tracker-bound", "metadata:\n  requires: work-tracker\n")
+        result = self.install("agents", "--skill", "tracker-bound")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.project / ".agents" / "skills" / "tracker-bound" / "SKILL.md").is_file())
+        self.assertEqual(
+            result.stderr.strip(),
+            "note: tracker-bound needs this repository's work tracker (metadata.requires: work-tracker); it is not portable",
+        )
+
+    def test_claude_adds_the_user_invocation_line_and_leaves_other_skills_byte_identical(self) -> None:
+        user = self.skill("user-skill", "metadata:\n  invocation: user\n")
+        plain = self.skill("plain-skill")
+        result = self.install("claude", "--all")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        installed = self.project / ".claude" / "skills"
+        user_text = (installed / "user-skill" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("disable-model-invocation: true", user_text)
+        self.assertEqual(
+            (installed / "user-skill" / "SKILL.md").read_bytes(),
+            _lib.claude_skill_text((user / "SKILL.md").read_text(encoding="utf-8")).encode("utf-8"),
+        )
+        self.assertEqual((installed / "plain-skill" / "SKILL.md").read_bytes(), (plain / "SKILL.md").read_bytes())
+
+    def test_agents_target_is_byte_identical_to_the_source_folder(self) -> None:
+        source = self.skill("example-skill")
+        write(source / "references" / "notes.md", "note\n")
+        (source / "assets").mkdir()
+        (source / "assets" / "data.bin").write_bytes(b"\x00\xff\x01")
+        result = self.install("agents", "--skill", "example-skill")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        dest = self.project / ".agents" / "skills" / "example-skill"
+        self.assertEqual(file_bytes(dest), file_bytes(source))
+
+
+class NewSkillTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name) / "library"
+        (self.root / "agents" / "skills").mkdir(parents=True)
+
+    def scaffold(self, name: str, *args: str) -> subprocess.CompletedProcess:
+        return run_library_tool("new_skill", self.root, name, *args)
+
+    def path(self, name: str) -> Path:
+        return self.root / "agents" / "skills" / name / "SKILL.md"
+
+    def parse(self, name: str) -> tuple[dict, str]:
+        return _lib.parse_front_matter(self.path(name).read_text(encoding="utf-8"), _lib.SKILL_MAP_KEYS)
+
+    def test_scaffolds_with_repository_front_matter_and_next_step(self) -> None:
+        result = self.scaffold("example-skill")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fm, body = self.parse("example-skill")
+        self.assertEqual(fm["name"], "example-skill")
+        self.assertEqual(fm["description"], "<fill: what this skill does and when to use it>")
+        self.assertNotIn("license", fm)
+        self.assertNotIn("category", fm)
+        self.assertNotIn("metadata", fm)
+        self.assertLessEqual(len(body.strip().splitlines()), 40)
+        for heading in ("## Steps", "## Verify", "## Stop and ask"):
+            self.assertIn(heading, body)
+        self.assertIn("<fill:", body)
+        self.assertEqual(result.stdout.splitlines()[0], "created agents/skills/example-skill/SKILL.md")
+        self.assertEqual(
+            result.stdout.splitlines()[1],
+            "list example-skill in a role's skills: field (agents/roles/<role>/ROLE.md), then run: "
+            "python3 tools/sync_agents.py && python3 tools/sync_indexes.py",
+        )
+
+    def test_refuses_an_existing_folder_without_force(self) -> None:
+        self.assertEqual(self.scaffold("example-skill").returncode, 0)
+        result = self.scaffold("example-skill")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("already exists", result.stderr)
+
+    def test_force_overwrites(self) -> None:
+        self.assertEqual(self.scaffold("example-skill", "--description", "First description").returncode, 0)
+        result = self.scaffold("example-skill", "--description", "Second description", "--force")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fm, _ = self.parse("example-skill")
+        self.assertEqual(fm["description"], "Second description")
+
+    def test_description_with_a_colon_round_trips(self) -> None:
+        description = "Use when: testing a colon"
+        result = self.scaffold("example-skill", "--description", description)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'description: "{description}"', self.path("example-skill").read_text(encoding="utf-8"))
+        fm, _ = self.parse("example-skill")
+        self.assertEqual(fm["description"], description)
+
+    def test_description_with_quotes_and_backslashes_round_trips(self) -> None:
+        description = 'Say "hi" and use C:\\tmp'
+        result = self.scaffold("example-skill", "--description", description)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fm, _ = self.parse("example-skill")
+        self.assertEqual(fm["description"], description)
+
+    def test_force_repairs_broken_front_matter(self) -> None:
+        write(self.path("example-skill"), "---\nname: example-skill\ndescription: [unclosed\n---\n")
+        result = self.scaffold("example-skill", "--description", "Use when testing repair.", "--force")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fm, _ = self.parse("example-skill")
+        self.assertEqual(fm["description"], "Use when testing repair.")
+
+    def test_empty_and_over_long_descriptions_are_rejected(self) -> None:
+        for description, expected in (("", "must not be empty"), ("x" * 1025, "1024")):
+            with self.subTest(length=len(description)):
+                result = self.scaffold("example-skill", "--description", description)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse(self.path("example-skill").parent.exists())
+
+    def test_invalid_names_are_rejected(self) -> None:
+        for name in ("Bad_Name", "-leading", "trailing-", "double--hyphen", "x" * 65):
+            with self.subTest(name=name):
+                result = run_library_tool("new_skill", self.root, "--", name)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("name must be", result.stderr)
+                self.assertFalse((self.root / "agents" / "skills" / name).exists())
+
+    def test_scaffolded_skill_parses_and_its_description_round_trips(self) -> None:
+        result = self.scaffold("example-skill")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fm, _ = self.parse("example-skill")
+        self.assertEqual(fm["name"], "example-skill")
+        self.assertEqual(fm["description"], "<fill: what this skill does and when to use it>")
+
+    def test_unreadable_front_matter_in_another_skill_refuses_scaffolding(self) -> None:
+        write(self.root / "agents" / "skills" / "broken" / "SKILL.md", "---\nname: broken\ndescription: [unclosed\n---\n")
+        result = self.scaffold("example-skill")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("fix unreadable skills before scaffolding", result.stderr)
+        self.assertIn("agents/skills/broken/SKILL.md", result.stderr)
+        self.assertFalse(self.path("example-skill").exists())
+
+    def test_metadata_is_written_only_when_requested(self) -> None:
+        cases = {
+            "plain": ((), None),
+            "tracker": (("--requires", "work-tracker"), {"requires": "work-tracker"}),
+            "user": (("--invocation", "user"), {"invocation": "user"}),
+            "both": (("--requires", "work-tracker", "--invocation", "user"), {"requires": "work-tracker", "invocation": "user"}),
+        }
+        for name, (args, expected) in cases.items():
+            with self.subTest(name=name):
+                result = self.scaffold(name, *args)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                fm, _ = self.parse(name)
+                self.assertEqual(fm.get("metadata"), expected)
+                self.assertNotIn("license", fm)
+                self.assertNotIn("category", fm)
+
+
 class FloorTests(unittest.TestCase):
     def test_every_tool_stops_with_one_clear_line_on_an_older_python(self) -> None:
         older = (_lib.MIN_PYTHON[0], _lib.MIN_PYTHON[1] - 1, 0, "final", 0)
