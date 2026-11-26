@@ -408,6 +408,20 @@ class HealthTests(RepoTestCase):
         p.write_text(original.replace("\n---\n", "\nmetadata:\n  bogus: x\n---\n", 1))
         self.assertIn("metadata key 'bogus' is not allowed", self.fails("check"))
 
+    def test_non_map_skill_metadata_is_reported_and_never_crashes(self) -> None:
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        original = p.read_text()
+        for shape in ("metadata:", "metadata: user", "metadata: []"):
+            with self.subTest(shape=shape):
+                p.write_text(original.replace("\n---\n", f"\n{shape}\n---\n", 1), encoding="utf-8")
+                out = self.fails("check")
+                self.assertIn("metadata must hold indented `key: value` lines", out)
+                self.assertNotIn("Traceback", out)
+                r = self.sh("sync_agents")
+                self.assertNotEqual(r.returncode, 0, f"sync_agents accepted {shape}:\n{r.stdout}\n{r.stderr}")
+                self.assertNotIn("Traceback", r.stdout + r.stderr)
+        p.write_text(original, encoding="utf-8")
+
     def test_skill_body_over_40_lines_warns_and_40_does_not(self) -> None:
         folder = self.repo / "agents" / "skills" / "line-test"
         folder.mkdir()

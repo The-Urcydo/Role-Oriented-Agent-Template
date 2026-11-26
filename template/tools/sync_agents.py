@@ -93,9 +93,24 @@ def _preloadable_skills(root: Path) -> dict[str, list[str]]:
         sk = root / "agents" / "skills" / skill / "SKILL.md"
         if len(roles) != 1 or not sk.is_file():
             continue
-        if (read_skill_fm(sk).get("metadata") or {}).get("invocation") == "user":
+        meta = read_skill_fm(sk).get("metadata")
+        if isinstance(meta, dict) and meta.get("invocation") == "user":
             continue
         out.setdefault(roles[0], []).append(skill)
+    return out
+
+
+def _invalid_skill_metadata(root: Path) -> list[str]:
+    """SKILL.md files whose `metadata` is present but not a one-level map. check.py reports the shape in
+    detail; the sync refuses them so a malformed source is never copied into every adapter silently."""
+    out: list[str] = []
+    for sk in skill_folders(root):
+        md = sk / "SKILL.md"
+        if not md.is_file():
+            continue
+        fm = read_skill_fm(md)
+        if "metadata" in fm and not isinstance(fm["metadata"], dict):
+            out.append(f"agents/skills/{sk.name}/SKILL.md")
     return out
 
 
@@ -301,6 +316,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--check", action="store_true", help="exit 1 if adapters are out of date")
     args = ap.parse_args(argv)
     root = repo_root()
+    bad = _invalid_skill_metadata(root)
+    if bad:
+        for p in bad:
+            print(f"{p}: metadata must hold indented `key: value` lines (invocation, requires), or be left out; "
+                  f"run `python3 tools/check.py`")
+        return 1
     if args.check:
         problems = drift(root)
         for p in problems:

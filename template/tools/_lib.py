@@ -544,7 +544,8 @@ def claude_skill_text(text: str) -> str:
         fm, _ = parse_front_matter(text, SKILL_MAP_KEYS)
     except FrontMatterError:
         return text
-    if not m or (fm or {}).get("metadata", {}).get("invocation") != "user":
+    meta = (fm or {}).get("metadata")
+    if not m or not isinstance(meta, dict) or meta.get("invocation") != "user":
         return text
     return text[:m.end(1)] + "\ndisable-model-invocation: true" + text[m.end(1):]
 
