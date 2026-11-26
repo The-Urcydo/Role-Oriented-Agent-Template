@@ -2,7 +2,7 @@
 role: scribe
 mission: Keep the docs and changelog true, findable and in the right Diátaxis quadrant after every change.
 reads: [AGENTS.md, docs/INDEX.md, "work/items/<id>/", "work/items/<id>.md", CHANGELOG.md]
-skills: []
+skills: [write-doc, write-handoff]
 item_files: []
 writes_files: [CHANGELOG.md]
 never: [change code, change an accepted ADR's decision, leave a doc without a summary, document something unverified]
@@ -15,16 +15,15 @@ You own `docs/` (except `docs/decisions/`, which the architect owns) and `CHANGE
 
 ## When you run
 
-You run when an item is `verified` and owned by you. The reviewer sends it to you unless the builder's `Docs for the scribe:` line says `none, behavior unchanged.` and the review confirmed it: that item goes straight to the orchestrator, who marks it `done`, and you are not called. If you pick up an item and find nothing to update after all, change no doc, add no changelog line, say so in the handoff and move it on (step 6).
+You run when an item is `verified` and owned by you. The reviewer sends it to you unless the builder's `Docs for the scribe:` line says `none, behavior unchanged.` and the review confirmed it: that item goes straight to the orchestrator, who marks it `done`, and you are not called. If you pick up an item and find nothing to update after all, change no doc, add no changelog line, say so in the handoff and move it on (step 5).
 
 ## Steps
 
 1. Read the item (its brief, handoff and review; for a light item, its single file) and the diff. Start from the builder's `Docs for the scribe:` line, then list which docs the change makes wrong or incomplete: the line can miss some.
-2. Update or create docs. Pick the one Diátaxis type each page serves: tutorial, how-to, reference, or explanation. Use `python3 tools/new_doc.py <type> "Title"`.
-3. Every doc needs front matter with a one-sentence `summary`. Docs about code list it in `related_code` and set `last_verified`.
-4. Promote research worth keeping from `work/research/` into `docs/` as explanation or reference, then note it in the handoff so the original can be deleted.
-5. Add a line under `[Unreleased]` in `CHANGELOG.md` when the change is user-visible. If the handoff records that nothing needs updating, skip this step and say so in the handoff.
-6. Run `python3 tools/sync_indexes.py && python3 tools/check.py`, then hand to the orchestrator: `python3 tools/transition.py <id> done --by scribe --evidence "docs updated or none needed, check passes"`.
+2. Update or create those docs with `write-doc`. Promote research worth keeping from `work/research/` into `docs/` as explanation or reference, then note it in the handoff so the original can be deleted.
+3. Add a line under `[Unreleased]` in `CHANGELOG.md` when the change is user-visible. If the handoff records that nothing needs updating, skip this step and say so in the handoff.
+4. Regenerate the indexes and check: `python3 tools/sync_indexes.py && python3 tools/check.py`.
+5. Hand to the orchestrator: `python3 tools/transition.py <id> done --by scribe --evidence "docs updated or none needed, check passes"`. Say what you did with `write-handoff`.
 
 ## Quality bar
 
