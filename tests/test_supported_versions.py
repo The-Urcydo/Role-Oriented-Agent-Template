@@ -8,7 +8,7 @@ README Tooling table row, the ``## Supported Python versions`` section of CONTRI
 Versions are compared numerically as ``(major, minor)``: ``3.10 > 3.6``. A lexical comparison would
 put ``3.10`` below ``3.6`` and quietly pick the wrong floor.
 
-Python 3.12 compatible.
+Python 3.13 compatible.
 """
 from __future__ import annotations
 
@@ -146,4 +146,13 @@ def test_shipped_workflow_is_at_least_the_floor():
     assert not below, (
         f"{SHIPPED_CI} runs actions/setup-python with {below}, below the floor "
         f"{floor[0]}.{floor[1]} derived from {CI}"
+    )
+
+
+def test_tools_declare_the_same_floor_as_ci():
+    lib = ROOT / "template" / "tools" / "_lib.py"
+    found = re.search(r"^MIN_PYTHON = \((\d+), (\d+)\)\s*$", lib.read_text(encoding="utf-8"), re.M)
+    assert found, "template/tools/_lib.py must declare MIN_PYTHON = (major, minor) on one line"
+    assert (int(found.group(1)), int(found.group(2))) == floor_version(), (
+        f"MIN_PYTHON in template/tools/_lib.py must equal the CI floor {floor_version()} derived from {CI}"
     )

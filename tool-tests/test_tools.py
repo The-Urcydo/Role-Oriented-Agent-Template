@@ -1695,5 +1695,20 @@ class PreCommitHookTests(RepoTestCase):
         self.assertIn("hooks:\n    git config core.hooksPath .githooks", recipe)
 
 
+class FloorTests(unittest.TestCase):
+    def test_every_tool_stops_with_one_clear_line_on_an_older_python(self) -> None:
+        older = (_lib.MIN_PYTHON[0], _lib.MIN_PYTHON[1] - 1, 0, "final", 0)
+        tools = sorted((ROOT / "tools").glob("*.py"))
+        self.assertGreater(len(tools), 10)
+        for tool in tools:
+            code = (f"import sys, runpy; sys.version_info = {older!r}; sys.argv = [{tool.name!r}, '--help']; "
+                    f"sys.path.insert(0, {str(tool.parent)!r}); runpy.run_path({str(tool)!r}, run_name='__main__')")
+            r = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60)
+            with self.subTest(tool=tool.name):
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertEqual(len(r.stderr.strip().splitlines()), 1, r.stderr)
+                self.assertIn(f"need Python {_lib.MIN_PYTHON[0]}.{_lib.MIN_PYTHON[1]} or newer", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

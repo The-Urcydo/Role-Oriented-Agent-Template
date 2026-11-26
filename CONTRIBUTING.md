@@ -21,8 +21,8 @@ Thanks for your interest. This repository is the Copier template; the projects i
 
    The suite generates real projects and takes about two minutes: `pytest.ini` runs it in parallel with
    `pytest-xdist` and limits a bare `pytest` to `tests/`. Use `-n0` when debugging one test in order.
-   CI runs the suite twice on Python 3.12: once with the newest Copier and once with the floor parsed from
-   `requirements-dev.txt` (9.6.0). Both legs report as `template (3.12)`; `ci-gate` aggregates them, so no new
+   CI runs the suite twice on Python 3.13: once with the newest Copier and once with the floor parsed from
+   `requirements-dev.txt` (9.6.0). Both legs report as `template (3.13)`; `ci-gate` aggregates them, so no new
    required check or ruleset edit was needed. See the CI section of `docs/maintainers/decisions.md`.
 3. To try your branch by hand, always pass `--vcs-ref HEAD`:
 
@@ -46,7 +46,7 @@ Two rules set the range:
 - **Floor:** the oldest CPython release that still receives security fixes and has at least 18 months of support left at the time of a template release.
 - **Ceiling:** the newest stable CPython release.
 
-CI currently tests Python 3.12 and 3.14, with 3.15 informational until it has been green for two weeks; the floor today is 3.12.
+CI currently tests Python 3.13 and 3.14, with 3.15 informational until it has been green for two weeks; the floor today is 3.13.
 
 A newer push to a pull request cancels that pull request's older CI run, and a test job that runs longer than 30 minutes is stopped; runs on `main` always finish.
 
