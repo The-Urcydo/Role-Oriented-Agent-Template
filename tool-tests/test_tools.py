@@ -176,6 +176,18 @@ class FrontMatterTests(unittest.TestCase):
         # a one-level map holds strings only: a list value is refused
         with self.assertRaises(_lib.FrontMatterError):
             _lib.parse_front_matter("---\nmetadata:\n  invocation: [user]\n---\n", _lib.SKILL_MAP_KEYS)
+        # inline metadata maps remain invalid even for skills
+        with self.assertRaises(_lib.FrontMatterError):
+            _lib.parse_front_matter("---\nmetadata: {invocation: user}\n---\n", _lib.SKILL_MAP_KEYS)
+
+    def test_allowed_tools_map_exception_is_skill_only(self) -> None:
+        for value in ("{Read: true}", "\n  Read: true\n  Grep: true"):
+            with self.subTest(value=value):
+                text = f"---\nrole: r\nallowed-tools: {value}\n---\n"
+                with self.assertRaises(_lib.FrontMatterError):
+                    _lib.parse_front_matter(text)
+                fm, _ = _lib.parse_front_matter(text, _lib.SKILL_MAP_KEYS)
+                self.assertEqual(fm["allowed-tools"], {})
 
     def test_set_value_replaces_and_inserts(self) -> None:
         text = "---\nstatus: draft\nevidence:\n- old\nz: 1\n---\nbody\n"
@@ -194,6 +206,12 @@ class FrontMatterTests(unittest.TestCase):
     def test_links_ignore_code(self) -> None:
         text = "[a](x.md)\n`[b](y.md)`\n```\n[c](z.md)\n```\n[d](https://e.com)\n"
         self.assertEqual([t for _, t in _lib.md_links(text)], ["x.md", "https://e.com"])
+
+    def test_bom_front_matter_parses_and_preserves_the_body(self) -> None:
+        fm, body = _lib.parse_front_matter("\ufeff---\nname: example-skill\ndescription: Example.\n---\nbody\n")
+        self.assertEqual(fm["name"], "example-skill")
+        self.assertEqual(fm["description"], "Example.")
+        self.assertEqual(body, "body\n")
 
 
 class HealthTests(RepoTestCase):
@@ -402,6 +420,31 @@ class HealthTests(RepoTestCase):
         self.set_skills("builder", ["record-decision", "record-decision"])
         self.assertIn("more than once", self.fails("check"))
 
+    def test_a_skill_must_be_listed_by_a_role_charter(self) -> None:
+        folder = self.repo / "agents" / "skills" / "unlisted-skill"
+        folder.mkdir()
+        (folder / "SKILL.md").write_text(
+            "---\nname: unlisted-skill\ndescription: An unlisted test skill. Use when testing charter coverage.\n---\n"
+            "## Steps\n\n1. Read the fixture.\n",
+            encoding="utf-8",
+        )
+        self.ok("sync_agents")
+        self.assertIn("skill-unlisted", self.fails("check"))
+        self.set_skills("builder", [*self.charter_skills("builder"), "unlisted-skill"])
+        self.ok("sync_indexes")
+        self.ok("sync_agents")
+        self.ok("check", "--strict")
+
+    def test_a_skill_folder_without_skill_md_reports_one_error(self) -> None:
+        (self.repo / "agents" / "skills" / "empty-skill").mkdir(parents=True)
+        out = self.fails("check")
+        self.assertIn("skill folder has no SKILL.md", out)
+        self.assertNotIn("skill-unlisted", out)
+
+    def test_no_roles_skips_the_unlisted_skill_check(self) -> None:
+        shutil.rmtree(self.repo / "agents" / "roles")
+        self.assertNotIn("skill-unlisted", self.fails("check"))
+
     # --- skill front matter and size (R3, R4) ------------------------------------------------
     def test_skill_fields_outside_the_specification_are_rejected(self) -> None:
         p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
@@ -443,6 +486,8 @@ class HealthTests(RepoTestCase):
         head = ("---\nname: line-test\n"
                 "description: A body-size fixture. Use when testing the 40-line warning.\n---\n")
         (folder / "SKILL.md").write_text(head + "\n".join(f"line {i}" for i in range(41)) + "\n", encoding="utf-8")
+        self.set_skills("builder", [*self.charter_skills("builder"), "line-test"])
+        self.ok("sync_indexes")
         self.ok("sync_agents")
         out = self.ok("check")
         self.assertIn("skill-size", out)
@@ -453,10 +498,106 @@ class HealthTests(RepoTestCase):
         self.assertNotIn("skill-size", self.ok("check"))
         self.ok("check", "--strict")
 
+    def test_skill_stubs_warn_in_bodies_and_references_and_strict_fails(self) -> None:
+        folder = self.repo / "agents" / "skills" / "stub-test"
+        references = folder / "references"
+        references.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(
+            "---\nname: stub-test\ndescription: A stub test skill. Use when testing unfinished text.\n---\n"
+            "## Steps\n\n- <fill: x>\n\n- TODO: finish this\n\nThe word TODO in prose is fine.\n",
+            encoding="utf-8",
+        )
+        (references / "details.md").write_text("# Details\n\nTODO: finish the details\n", encoding="utf-8")
+        self.set_skills("builder", [*self.charter_skills("builder"), "stub-test"])
+        self.ok("sync_indexes")
+        self.ok("sync_agents")
+        out = self.ok("check")
+        self.assertIn("skill-stub", out)
+        self.assertIn("SKILL.md:7", out)
+        self.assertIn("SKILL.md:9", out)
+        self.assertIn("references/details.md:3", out)
+        self.assertNotIn("The word TODO", out)
+        self.assertIn("skill-stub", self.fails("check", "--strict"))
+
+    def test_skill_compatibility_must_be_1_to_500_characters(self) -> None:
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        p.write_text(original.replace("description:", "compatibility: " + "x" * 501 + "\ndescription:", 1),
+                     encoding="utf-8")
+        self.assertIn("compatibility must be a string of 1-500 chars", self.fails("check"))
+        p.write_text(original.replace("description:", "compatibility: " + "x" * 500 + "\ndescription:", 1),
+                     encoding="utf-8")
+        self.ok("sync_agents")
+        self.ok("check", "--strict")
+
+    def test_skill_allowed_tools_must_be_a_space_separated_string(self) -> None:
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        for value in ("[Read, Grep]", "{Read: true}", "\n  Read: true", "\n  Read: true\n  Grep: true"):
+            with self.subTest(value=value):
+                p.write_text(original.replace("description:", f"allowed-tools: {value}\ndescription:", 1),
+                             encoding="utf-8")
+                self.ok("sync_agents")
+                r = self.sh("check")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                out = r.stdout + r.stderr
+                self.assertIn("allowed-tools", out)
+                self.assertIn("Read Grep", out)
+                self.assertNotIn("Traceback", out)
+        p.write_text(original.replace("description:", "allowed-tools: Read Grep\ndescription:", 1),
+                     encoding="utf-8")
+        self.ok("sync_agents")
+        self.ok("check", "--strict")
+
+    def test_portable_skills_cannot_link_outside_their_folder(self) -> None:
+        p = self.repo / "agents" / "skills" / "write-skill" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        p.write_text(original + "\n[project](../../../README.md)\n", encoding="utf-8")
+        self.ok("sync_agents")
+        out = self.fails("check")
+        self.assertIn("skill-portable", out)
+        self.assertIn("requires: work-tracker", out)
+
+        p.write_text(original, encoding="utf-8")
+        p = self.repo / "agents" / "skills" / "review-work" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        p.write_text(original + "\n[project](../../../README.md)\n", encoding="utf-8")
+        self.ok("sync_agents")
+        self.assertNotIn("skill-portable", self.ok("check", "--strict"))
+
+    def test_malformed_metadata_does_not_suppress_portability_errors(self) -> None:
+        p = self.repo / "agents" / "skills" / "write-skill" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        p.write_text(original.replace("description:", "metadata: user\ndescription:", 1) +
+                     "\n[project](../../../README.md)\n", encoding="utf-8")
+        r = self.sh("check")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        out = r.stdout + r.stderr
+        self.assertIn("metadata must hold indented `key: value` lines", out)
+        self.assertIn("skill-portable", out)
+        self.assertIn("../../../README.md", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_portable_skills_may_link_to_an_existing_reference(self) -> None:
+        p = self.repo / "agents" / "skills" / "write-skill" / "SKILL.md"
+        original = p.read_text(encoding="utf-8")
+        (p.parent / "references").mkdir(exist_ok=True)
+        (p.parent / "references" / "x.md").write_text("# Details\n", encoding="utf-8")
+        p.write_text(original + "\n[details](references/x.md#example)\n", encoding="utf-8")
+        self.ok("sync_agents")
+        self.ok("check", "--strict")
+
+    def test_bom_front_matter_is_accepted(self) -> None:
+        p = self.repo / "agents" / "skills" / "write-skill" / "SKILL.md"
+        p.write_text("\ufeff" + p.read_text(encoding="utf-8"), encoding="utf-8")
+        self.ok("sync_agents")
+        self.assertNotIn("name must be", self.ok("check", "--strict"))
+
     # --- roster Skills column (R7) ------------------------------------------------------------
     def test_roster_skills_column_links_the_charter_list(self) -> None:
         self.set_skills("architect", ["record-decision", "write-doc"])
         self.set_skills("builder", [])
+        self.set_skills("orchestrator", [*self.charter_skills("orchestrator"), "tailor-template", "write-skill"])
         self.ok("sync_indexes")
         self.ok("sync_agents")
         text = (self.repo / "agents" / "ROSTER.md").read_text(encoding="utf-8")
@@ -1579,7 +1720,9 @@ class AdapterTests(RepoTestCase):
         listed = {s for names in preload.values() for s in names}
         self.assertNotIn(target, listed, f"{target} is listed by both {owner} and {other}")
         self.assertNotIn("unlisted-extra", listed)
-        self.ok("check", "--strict")
+        out = self.fails("check", "--strict")
+        self.assertIn("skill-unlisted", out)
+        self.assertIn("unlisted-extra", out)
 
     def test_a_role_with_no_skill_gets_no_skills_line(self) -> None:
         self.set_claude()
@@ -2186,6 +2329,22 @@ class NewSkillTests(unittest.TestCase):
         fm, _ = self.parse("example-skill")
         self.assertEqual(fm["name"], "example-skill")
         self.assertEqual(fm["description"], "<fill: what this skill does and when to use it>")
+        for tool in ("check.py", "sync_agents.py", "sync_indexes.py", "_lib.py"):
+            (self.root / "tools").mkdir(exist_ok=True)
+            shutil.copy(ROOT / "tools" / tool, self.root / "tools" / tool)
+        (self.root / "agents" / "roles" / "example").mkdir(parents=True, exist_ok=True)
+        write(self.root / "agents" / "roles" / "example" / "ROLE.md",
+              "---\nrole: example\nmission: Test scaffolding.\nreads: []\nnever: []\ndone_when: []\n"
+              "escalate_when: []\nskills: [example-skill]\n---\n# Example\n")
+        check = subprocess.run(
+            [sys.executable, str(self.root / "tools" / "check.py"), "--strict"],
+            cwd=self.root, env={**os.environ, "REPO_ROOT": str(self.root)},
+            capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(check.returncode, 1, check.stdout + check.stderr)
+        self.assertIn("skill-stub", check.stdout + check.stderr)
+        self.assertIn("agents/skills/example-skill/SKILL.md", check.stdout + check.stderr)
+        self.assertNotIn("skill-unlisted", check.stdout + check.stderr)
 
     def test_unreadable_front_matter_in_another_skill_refuses_scaffolding(self) -> None:
         write(self.root / "agents" / "skills" / "broken" / "SKILL.md", "---\nname: broken\ndescription: [unclosed\n---\n")

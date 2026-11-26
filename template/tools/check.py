@@ -37,6 +37,8 @@ ROOT_AGENTS_MAX_LINES = 100
 NESTED_AGENTS_MAX_LINES = 60
 DOC_MAX_LINES = 400
 SKILL_BODY_MAX_LINES = 40  # Block A: about 40 lines; the Agent Skills spec recommends < 500 lines / 5,000 tokens
+SKILL_COMPATIBILITY_MAX_CHARS = 500
+SKILL_STUB_RE = re.compile(r"^\s*(?:(?:[-+*]|\d+[.)])\s+)?TODO:")
 # Top-level SKILL.md fields: the Agent Skills specification set. A tool-specific field belongs in a generated adapter.
 SKILL_FIELDS = ("name", "description", "license", "compatibility", "metadata", "allowed-tools")
 SUMMARY_MAX = 240
@@ -459,12 +461,21 @@ def check_workspace_packages(root: Path, rep: Report) -> None:
 
 def check_skills(root: Path, rep: Report) -> None:
     # One flat lane: agents/skills/<name>/. `.claude/skills/` is generated from it.
+    roles = load_roles(root)
+    listed: set[str] = set()
+    for role in roles.values():
+        names = (role["fm"] or {}).get("skills") if not role["error"] else None
+        if isinstance(names, list):
+            listed.update(name for name in names if isinstance(name, str))
     for d in skill_folders(root):
         sk = d / "SKILL.md"
         r = rel(root, sk)
         if not sk.exists():
             rep.error("skill", rel(root, d), "skill folder has no SKILL.md")
             continue
+        if roles and d.name not in listed:
+            rep.error("skill-unlisted", r,
+                      "no role charter lists this skill; add it to a charter's `skills:`, or delete the skill")
         text = read_text(sk)
         try:
             fm, body = parse_front_matter(text, SKILL_MAP_KEYS)
@@ -479,6 +490,13 @@ def check_skills(root: Path, rep: Report) -> None:
             rep.error("skill", r, f"name '{name}' must match the folder '{d.name}'")
         if not desc.strip() or len(desc) > 1024:
             rep.error("skill", r, "description must be 1-1024 chars and say what the skill does and when to use it")
+        if "compatibility" in fm and (
+                not isinstance(fm["compatibility"], str) or not 1 <= len(fm["compatibility"]) <= SKILL_COMPATIBILITY_MAX_CHARS):
+            rep.error("skill", r, f"compatibility must be a string of 1-{SKILL_COMPATIBILITY_MAX_CHARS} chars (or be left out)")
+        allowed_tools = fm.get("allowed-tools")
+        if "allowed-tools" in fm and not (
+                isinstance(allowed_tools, str) and allowed_tools.strip() and not any(c.isspace() and c != " " for c in allowed_tools)):
+            rep.error("skill", r, "allowed-tools must be a single-line string of space-separated tool names such as `Read Grep`, not a list or map")
         for field in sorted(set(fm) - set(SKILL_FIELDS)):
             rep.error("skill", r, f"field '{field}' is not in the Agent Skills specification; the source holds only "
                       f"{', '.join(SKILL_FIELDS)}. A tool-specific setting goes in metadata.invocation (value `user`) and is generated into the adapter copy")
@@ -490,6 +508,23 @@ def check_skills(root: Path, rep: Report) -> None:
                 rep.error("skill", r, f"metadata key '{key}' is not allowed; use one of: {', '.join(SKILL_METADATA)}")
             elif value not in SKILL_METADATA[key]:
                 rep.error("skill", r, f"metadata.{key} '{value}' is not allowed; use one of: {', '.join(SKILL_METADATA[key])}")
+        sources = [sk, *sorted((d / "references").glob("*.md"))]
+        for p in sources:
+            source_text = read_text(p)
+            for number, line in enumerate(source_text.splitlines(), start=1):
+                if "<fill" in line or SKILL_STUB_RE.match(line):
+                    rep.warn("skill-stub", f"{rel(root, p)}:{number}",
+                             "unfinished skill text; fill it in or delete the skill")
+        if not isinstance(meta, dict) or "requires" not in meta:
+            for p in sources:
+                for line, target in md_links(read_text(p)):
+                    path = target.split("#", 1)[0]
+                    if not path or re.match(r"^(?:https?:|mailto:)", path, re.I):
+                        continue
+                    if not (p.parent / path).resolve().is_relative_to(d.resolve()):
+                        rep.error("skill-portable", f"{rel(root, p)}:{line}",
+                                  f"links outside its own folder: {target}; a skill that does not declare "
+                                  "requires: work-tracker must work when installed alone")
         n = len(body.strip().splitlines())
         if n > SKILL_BODY_MAX_LINES:
             rep.warn("skill-size", r, f"{n} body lines; keep it to about {SKILL_BODY_MAX_LINES} and move detail into references/")
