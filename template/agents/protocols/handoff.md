@@ -7,7 +7,19 @@ owner_role: architect
 ---
 # Handoff protocol
 
-A session ends and a fresh one starts with no memory. The handoff file is the memory. `tools/transition.py` enforces everything below.
+A session ends and a fresh one starts with no memory. The handoff file is the memory. `tools/transition.py` enforces the state machine and the rules on every move below.
+
+## What the handoff must answer
+
+A fresh session must be able to answer five questions without the old conversation:
+
+1. Where are we now?
+2. What is already decided?
+3. What has already failed?
+4. What is the next action, and who does it?
+5. What must not happen next?
+
+`write-handoff` gives the steps.
 
 ## States and allowed moves
 
@@ -53,16 +65,11 @@ Body sections: **Current state** (one paragraph), **Decisions made** (so nobody 
 
 ### Docs for the scribe
 
-Before an item goes to `in-review`, the builder writes one line, every time: at the end of **Current state** for a full item, or in the light item's `## Docs for the scribe` section.
-
-- `Docs for the scribe: none, behavior unchanged.` when no behavior changed and no doc describes what was touched;
-- otherwise `Docs for the scribe: <the docs to update, and the CHANGELOG.md line>`.
-
-The reviewer routes on that line when it approves. A `none` that the diff supports skips the scribe: `transition.py <id> verified --by reviewer --owner orchestrator ...`, and the orchestrator marks the item `done`. Anything else (a missing line, listed docs, a changed behavior, a `none` the diff contradicts) keeps the default owner, the scribe. The tools do not read the line: a missing line costs one scribe session, never a skipped doc. Nobody rewrites another role's line.
+Before an item goes to `in-review`, the builder writes one line, every time (`Docs for the scribe: none, behavior unchanged.` or `Docs for the scribe: <docs and changelog line>`), in the format `write-handoff` gives: at the end of **Current state** for a full item, or in the light item's `## Docs for the scribe` section. The reviewer routes on it when it approves, as its charter says: a `none` that the diff supports skips the scribe, anything else keeps the default owner, the scribe. The tools do not read the line: a missing line costs one scribe session, never a skipped doc. Nobody rewrites another role's line.
 
 ## Who writes what
 
-`handoff.md` is the one item file every role edits: whoever holds the item keeps its body current by hand and changes its front matter through `transition.py`. For a light item, the single file is the handoff. Every other item file belongs to the roles that list it in `item_files`.
+`handoff.md` is the one item file every role edits: whoever holds the item keeps its body current by hand and changes its front matter through `transition.py`. For a light item, the single file is the handoff. Every other item file belongs to the roles that list it in `item_files`. The handoff travels with the item: if the work moves to another branch or worktree, the handoff moves with it.
 
 To change only the next step, owner or evidence without moving the status: `python3 tools/transition.py <id> --next "..." [--owner ROLE] [--evidence "..."]` (or pass the current status name).
 
