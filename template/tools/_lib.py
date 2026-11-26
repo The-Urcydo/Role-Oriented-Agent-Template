@@ -249,9 +249,10 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
     Returns (None, text) when the file has no front matter. Raises FrontMatterError
     when the block exists but cannot be parsed.
     """
-    m = FM_RE.match(text)
+    m = FM_RE.match(text[1:] if text.startswith("\ufeff") else text)
     if not m:
         return None, text
+    prefix = 1 if text.startswith("\ufeff") else 0
     data: dict[str, Any] = {}
     key: str | None = None
     for offset, raw in enumerate(m.group(1).split("\n"), start=2):
@@ -297,7 +298,7 @@ def parse_front_matter(text: str, map_keys: tuple[str, ...] = ()) -> tuple[dict[
             data[key] = _split_inline(rest[1:-1])
         else:
             data[key] = _scalar(rest)
-    return data, text[m.end():]
+    return data, text[m.end() + prefix:]
 
 
 _RESERVED = {"true", "false", "null", "~", "yes", "no", "on", "off"}
