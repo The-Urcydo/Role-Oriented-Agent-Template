@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -225,7 +226,7 @@ class EvalHarnessTests(RepoTestCase):
             skills = sandbox / "agents" / "skills"
             shutil.rmtree(skills / "review-work")
             charter = sandbox / "agents" / "roles" / "reviewer" / "ROLE.md"
-            charter.write_text(charter.read_text().replace("skills: [review-work]", "skills: []"))
+            charter.write_text(re.sub(r"(?m)^skills: .*$", "skills: []", charter.read_text()))
             eval_harness.sync_indexes.write_outputs(sandbox)
             eval_harness.sync_agents.sync(sandbox)
             passed, reason = eval_harness.grade_task(sandbox, "role-skill-discovery", meta)

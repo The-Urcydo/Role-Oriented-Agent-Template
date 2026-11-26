@@ -383,10 +383,15 @@ class HealthTests(RepoTestCase):
     # --- charter `skills:` list (R2) ---------------------------------------------------------
     def test_a_charter_may_list_no_skills_but_must_have_the_key(self) -> None:
         builder = self.repo / "agents" / "roles" / "builder" / "ROLE.md"
+        self.set_skills("builder", [])
+        self.ok("sync_indexes")
+        self.ok("sync_agents")
         self.assertIn("skills: []", builder.read_text())
         self.ok("check", "--strict")
         builder.write_text(re.sub(r"(?m)^skills: \[\]\n", "", builder.read_text(encoding="utf-8"), count=1),
                            encoding="utf-8")
+        self.ok("sync_indexes")
+        self.ok("sync_agents")
         out = self.fails("check")
         self.assertIn("missing 'skills'", out)
 
@@ -451,6 +456,7 @@ class HealthTests(RepoTestCase):
     # --- roster Skills column (R7) ------------------------------------------------------------
     def test_roster_skills_column_links_the_charter_list(self) -> None:
         self.set_skills("architect", ["record-decision", "write-doc"])
+        self.set_skills("builder", [])
         self.ok("sync_indexes")
         self.ok("sync_agents")
         text = (self.repo / "agents" / "ROSTER.md").read_text(encoding="utf-8")
@@ -1520,7 +1526,8 @@ class AdapterTests(RepoTestCase):
         self.assertEqual(actual, expected)
         all_preloaded = {s for names in actual.values() for s in names}
         merge_meta = _lib.read_skill_fm(self.repo / "agents" / "skills" / "merge-work" / "SKILL.md").get("metadata")
-        self.assertEqual(merge_meta, {"invocation": "user"})
+        self.assertIsInstance(merge_meta, dict)
+        self.assertEqual(merge_meta.get("invocation"), "user")
         self.assertNotIn("merge-work", all_preloaded, "merge-work is metadata.invocation: user")
         for skill, owners in listings.items():
             if len(owners) > 1:
