@@ -13,6 +13,7 @@ Independent review is the main quality gate in a repo with no human in the loop 
 
 - The reviewer is never the role that built the item. With a single model playing both roles, use a fresh session with no memory of the build, and read the brief before the builder's summary.
 - The reviewer does not fix findings. Fixing makes the reviewer a second builder and removes the second pair of eyes.
+- The author of an item's brief is not its only independent reviewer. An important item (one that changes tools, workflows, the agent harness or root rules) is also reviewed by a fresh session that did not write or shape the brief. That reviewer recomputes every count and file list in the brief, the handoff and the description from the repository.
 
 ## Procedure
 
@@ -30,7 +31,7 @@ Independent review is the main quality gate in a repo with no human in the loop 
 | major | Meets the letter but misses the intent, or is fragile | Must fix or be accepted by the human |
 | minor | Style, naming, small improvements | Fix now or log a new item |
 
-Each finding states: what, where (file and line), why it matters, and a recommended fix.
+Each finding states: what, where (file and line), why it matters, and a recommended fix. Do not inflate a style preference into a blocker, and do not soften a data-loss risk into a minor.
 
 ## Verdicts
 
@@ -39,3 +40,7 @@ Each finding states: what, where (file and line), why it matters, and a recommen
 - **reject**: the approach is wrong; move to `blocked`, `draft` (to re-plan), or `canceled` (to drop it) with an explanation in `--next`.
 
 A second review is needed after changes requested if any blocker was found.
+
+## Routing
+
+Where the item goes before the verdict (security first when the brief requires it) and after it (the scribe or the orchestrator after `approve`, the builder after `changes requested`, planning after `reject`) is in the reviewer's `ROLE.md`. The `review-work` skill is the method.
