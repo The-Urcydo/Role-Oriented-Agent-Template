@@ -33,7 +33,7 @@ An item whose builder wrote `Docs for the scribe: none, behavior unchanged.` and
 
 - [ ] `review.md` exists, written by a role other than the builder, with a verdict and per-criterion evidence.
 - [ ] No blocker or major finding is left open.
-- [ ] A required security review exists, and its blocker and major findings are fixed or accepted by the human.
+- [ ] A required security review exists, its blockers are fixed, and its major findings are fixed or accepted by the human.
 
 A light item has no `review.md`: the reviewer writes the verdict and evidence in its `## Review` section.
 
