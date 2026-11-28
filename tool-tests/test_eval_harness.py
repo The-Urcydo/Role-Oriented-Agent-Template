@@ -35,7 +35,7 @@ class EvalHarnessTests(RepoTestCase):
         for task_id in (
             "find-the-right-doc", "respect-ownership", "handoff-roundtrip", "escalation-discipline",
             "role-skill-discovery", "ambiguous-directive", "merge-discipline", "callable-researcher",
-            "security-routing", "conditional-scribe",
+            "security-routing", "conditional-scribe", "no-grant", "independent-review",
         ):
             if task_id == "security-routing" and "security" not in _lib.load_modules(self.repo):
                 continue
