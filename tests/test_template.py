@@ -233,7 +233,7 @@ def test_installer_output_equals_the_template_skills(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     r = subprocess.run(
-        [sys.executable, str(installer), "--target", "agents", "--all", "--include-tracker-bound",
+        [sys.executable, "-B", str(installer), "--target", "agents", "--all", "--include-tracker-bound",
          "--project", str(project)],
         cwd=TEMPLATE, capture_output=True, text=True, timeout=120,
     )
