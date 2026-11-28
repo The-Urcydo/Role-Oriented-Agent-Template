@@ -22,13 +22,13 @@
 #   6. mergeable_state is clean (polled while it reads unknown or null);
 #   7. the latest run of every check is completed with success, neutral or skipped.
 # Then it merges with a merge commit pinned to the head, with a message ending
-# "Delegated-under: ADR-0011", and verifies two parents, a deleted branch and green main CI.
+# "Delegated-under: ADR-<number>", and verifies two parents, a deleted branch and green main CI.
 #
 # Exit codes: 0 merged and verified; 2 refused before merging; 1 could not read or call;
 #             3 merged but a post-merge verification failed.
 #
-# Needs gh and jq, and network access for one `git fetch origin main`; the guard reads the base
-# CODEOWNERS from it, so a PR cannot add an owner and a stale checkout cannot hide a change on main.
+# Needs gh and jq, and network access for one `git fetch origin main`; the guard reads the decision
+# path and CODEOWNERS from that main commit, independent of the PR and local checkout.
 # The owner must have approved in person; this script never approves, never creates a review, and
 # never touches a secret.
 
@@ -39,7 +39,6 @@ R="The-Urcydo/Role-Oriented-Agent-Template"
 N="${1:-}"
 EXPECT="${2:-}"
 FILES_EXPECT="${3:-}"
-ADR="ADR-0011"
 END_DATE="2027-02-17"
 MERGEABLE_POLLS="${MERGEABLE_POLLS:-12}"
 MERGEABLE_SLEEP="${MERGEABLE_SLEEP:-10}"
@@ -119,10 +118,34 @@ awk 'END { exit !(NR < 3000) }' "$live" \
   || die "the PR changes 3000 or more files; GitHub truncates the file list there, so it cannot be reviewed this way"
 echo "files: $(wc -l < "$live" | tr -d ' ') reviewed"
 
-# 3. Owner approvals from the base CODEOWNERS. Fetching first keeps origin/main from going stale,
-# so an owner added or removed on main is seen as main has it now.
+# 3. Resolve the decision path and CODEOWNERS from the same fetched main commit.
 git fetch --quiet origin main >/dev/null 2>&1 || fail "cannot fetch origin/main"
-owners=$(git show "origin/main:.github/CODEOWNERS" 2>/dev/null \
+main_sha=$(git rev-parse --verify 'refs/remotes/origin/main^{commit}' 2>/dev/null) \
+  || fail "cannot resolve origin/main to a commit"
+git ls-tree -z --full-tree "$main_sha" -- docs/decisions/ > "$tmp/decisions" 2>/dev/null \
+  || fail "cannot read docs/decisions/ from origin/main"
+
+guard_record_pattern='^docs/decisions/([0-9]{4})-delegate-merges-under-a-guard\.md$'
+guard_record_count=0
+guard_record_number=""
+guard_record_metadata=""
+while IFS= read -r -d '' entry; do
+  path=${entry#*$'\t'}
+  if [[ "$path" =~ $guard_record_pattern ]]; then
+    guard_record_count=$((guard_record_count + 1))
+    guard_record_number=${BASH_REMATCH[1]}
+    guard_record_metadata=${entry%%$'\t'*}
+  fi
+done < "$tmp/decisions"
+[ "$guard_record_count" -eq 1 ] \
+  || die "expected one guarded-merge decision in docs/decisions/ from origin/main, found $guard_record_count"
+case "$guard_record_metadata" in
+  '100644 blob '*|'100755 blob '*) ;;
+  *) die "the guarded-merge decision in docs/decisions/ from origin/main must be a regular file" ;;
+esac
+ADR="ADR-$guard_record_number"
+
+owners=$(git show "$main_sha:.github/CODEOWNERS" 2>/dev/null \
   | sed 's/#.*//' \
   | awk 'NF { for (i = 2; i <= NF; i++) { sub(/^@/, "", $i); print tolower($i) } }' \
   | sort -u) || fail "cannot read .github/CODEOWNERS from origin/main"
