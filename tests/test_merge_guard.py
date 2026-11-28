@@ -25,8 +25,23 @@ REPO = "The-Urcydo/Role-Oriented-Agent-Template"
 HEAD = "0123456789abcdef0123456789abcdef01234567"
 MERGE = "fedcba9876543210fedcba9876543210fedcba98"
 OTHER = "9999999999999999999999999999999999999999"
+TRUSTED_MAIN = "1234567890abcdef1234567890abcdef12345678"
 BRANCH = "chore/example"
 CODEOWNERS = "# owners\n*   @nguyenquocduyloc   @NguyenLoc231\n"
+
+GIT_FETCH = ("fetch", "--quiet", "origin", "main")
+GIT_SHOW_LEGACY_CODEOWNERS = ("show", "origin/main:.github/CODEOWNERS")
+GIT_RESOLVE_MAIN = ("rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
+GIT_LIST_DECISIONS = ("ls-tree", "-z", "--full-tree", TRUSTED_MAIN, "--", "docs/decisions/")
+GIT_SHOW_TRUSTED_CODEOWNERS = ("show", f"{TRUSTED_MAIN}:.github/CODEOWNERS")
+GIT_READ_SEQUENCES = (
+    (GIT_FETCH, GIT_SHOW_LEGACY_CODEOWNERS),
+    (GIT_FETCH, GIT_RESOLVE_MAIN, GIT_LIST_DECISIONS, GIT_SHOW_TRUSTED_CODEOWNERS),
+)
+LEGACY_GUARD_TREE_ROW = (
+    "100644 blob 5865815db4d54b1d32cddbab4df4aaa7872ce860\t"
+    "docs/decisions/0011-delegate-merges-under-a-guard.md"
+)
 
 FAKE_GH = r'''
 import json
@@ -73,24 +88,27 @@ else:
     print(json.dumps(item))
 '''
 
-FAKE_GIT = """#!/bin/sh
-case "$1" in
-  fetch)
-    [ "$2" = --quiet ] && [ "$3" = origin ] && [ "$4" = main ] \
-      || { echo "fake git: $*" >&2; exit 1; }
-    ;;
-  show)
-    [ "$2" = "origin/main:.github/CODEOWNERS" ] \
-      || { echo "fake git: $*" >&2; exit 1; }
-    ;;
-  *)
-    echo "fake git: $*" >&2; exit 1
-    ;;
-esac
-printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
-[ "$1" = show ] && cat "$FAKE_CODEOWNERS"
-exit 0
-"""
+FAKE_GIT = r'''
+import json
+import os
+import sys
+from pathlib import Path
+
+scenario_dir = Path(os.environ["FAKE_GIT_DIR"])
+argv = sys.argv[1:]
+with (scenario_dir / "git-calls.jsonl").open("a") as log:
+    log.write(json.dumps(argv) + "\n")
+
+scenario = json.loads((scenario_dir / "scenario.json").read_text())
+route = next((r for r in scenario["git_routes"] if r["argv"] == argv), None)
+if route is None:
+    print(f"fake git: unexpected arguments {argv!r}", file=sys.stderr)
+    sys.exit(1)
+if route["error"] is not None:
+    print(route["error"], file=sys.stderr)
+    sys.exit(1)
+sys.stdout.write(route["stdout"])
+'''
 
 
 FAKE_DATE = r'''
@@ -128,7 +146,7 @@ class Result:
     out: str
     err: str
     calls: list[list[str]]
-    git_calls: list[str]
+    git_calls: tuple[tuple[str, ...], ...]
 
     @property
     def writes(self) -> list[list[str]]:
@@ -179,7 +197,10 @@ def check_page(checks) -> dict:
 def build_scenario(*, prs=None, files=("README.md",), reviews=None, checks=None, merge=None,
                    commit=None, main_checks=None, branch_exists=False,
                    branch_error: str | None = None, codeowners=CODEOWNERS,
-                   user_login: str = "nguyenquocduyloc", user_error: str | None = None) -> dict:
+                   user_login: str = "nguyenquocduyloc", user_error: str | None = None,
+                   trusted_tree_rows: tuple[str, ...] = (LEGACY_GUARD_TREE_ROW,),
+                   git_failures: dict[tuple[str, ...], str] | None = None) -> dict:
+    """Build fake responses. Give native tree rows without NULs and key Git failures by exact argv."""
     prs = list(prs) if prs is not None else [pull_request()]
     reviews = list(reviews) if reviews is not None else [review()]
     checks = list(checks) if checks is not None else [check_run()]
@@ -192,8 +213,19 @@ def build_scenario(*, prs=None, files=("README.md",), reviews=None, checks=None,
         branch = [{"__status__": 1, "__body__": branch_error}]
     else:
         branch = [{"__status__": 404, "__body__": "gh: Not Found (HTTP 404)"}]
+    git_stdout = {
+        GIT_FETCH: "",
+        GIT_SHOW_LEGACY_CODEOWNERS: codeowners,
+        GIT_RESOLVE_MAIN: f"{TRUSTED_MAIN}\n",
+        GIT_LIST_DECISIONS: "".join(f"{row}\0" for row in trusted_tree_rows),
+        GIT_SHOW_TRUSTED_CODEOWNERS: codeowners,
+    }
+    git_errors = git_failures or {}
     return {
-        "codeowners": codeowners,
+        "git_routes": [
+            {"argv": argv, "stdout": stdout, "error": git_errors.get(argv)}
+            for argv, stdout in git_stdout.items()
+        ],
         "routes": [
             {"match": "user", "responses": [{"__fail__": user_error}] if user_error
                                           else [{"login": user_login}]},
@@ -227,16 +259,13 @@ def run_guard(tmp_path: Path, scenario: dict | None = None, *, args=None,
     gh.write_text(f"#!{sys.executable}\n{FAKE_GH}")
     gh.chmod(0o755)
     git = bin_dir / "git"
-    git.write_text(FAKE_GIT)
+    git.write_text(f"#!{sys.executable}\n{FAKE_GIT}")
     git.chmod(0o755)
     date_bin = bin_dir / "date"
     date_bin.write_text(f"#!{sys.executable}\n{FAKE_DATE}")
     date_bin.chmod(0o755)
 
-    codeowners = scenario_dir / "codeowners"
-    codeowners.write_text(scenario.pop("codeowners"))
-    scenario["date"] = today
-    (scenario_dir / "scenario.json").write_text(json.dumps(scenario))
+    (scenario_dir / "scenario.json").write_text(json.dumps({**scenario, "date": today}))
 
     if args is None:
         reviewed = tmp_path / "reviewed-files.txt"
@@ -247,8 +276,7 @@ def run_guard(tmp_path: Path, scenario: dict | None = None, *, args=None,
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "FAKE_GH_DIR": str(scenario_dir),
-        "FAKE_CODEOWNERS": str(codeowners),
-        "FAKE_GIT_LOG": str(scenario_dir / "git-calls.log"),
+        "FAKE_GIT_DIR": str(scenario_dir),
         "MERGEABLE_POLLS": "2",
         "MERGEABLE_SLEEP": "0",
         "MAIN_CI_POLLS": "2",
@@ -262,8 +290,11 @@ def run_guard(tmp_path: Path, scenario: dict | None = None, *, args=None,
                           capture_output=True, text=True, timeout=60)
     log = scenario_dir / "calls.jsonl"
     calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
-    git_log = scenario_dir / "git-calls.log"
-    git_calls = git_log.read_text().splitlines() if git_log.exists() else []
+    git_log = scenario_dir / "git-calls.jsonl"
+    git_calls = (
+        tuple(tuple(json.loads(line)) for line in git_log.read_text().splitlines())
+        if git_log.exists() else ()
+    )
     return Result(proc.returncode, proc.stdout, proc.stderr, calls, git_calls)
 
 
@@ -302,8 +333,7 @@ def test_the_script_is_executable_and_parses(tmp_path):
 def test_the_base_codeowners_is_read_from_origin_main(tmp_path):
     result = run_guard(tmp_path, build_scenario())
     assert result.code == 0, result.err
-    assert result.git_calls == ["fetch --quiet origin main",
-                                "show origin/main:.github/CODEOWNERS"]
+    assert result.git_calls in GIT_READ_SEQUENCES
 
 
 # ---------------------------------------------------------------- PR state
@@ -847,5 +877,4 @@ def test_the_guard_only_reads_and_merges(tmp_path):
     [merge] = result.writes
     assert merge[:4] == ["api", "-X", "PUT", f"repos/{REPO}/pulls/7/merge"], merge
     assert "merge_method=merge" in merge
-    assert result.git_calls == ["fetch --quiet origin main",
-                                "show origin/main:.github/CODEOWNERS"]
+    assert result.git_calls in GIT_READ_SEQUENCES

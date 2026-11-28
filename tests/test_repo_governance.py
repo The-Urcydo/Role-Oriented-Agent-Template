@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import re
 import shutil
+import stat
 from pathlib import Path
 
 import pytest
@@ -31,11 +32,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CODEOWNERS = ".github/CODEOWNERS"
 CI = ".github/workflows/test.yml"
 RULES = "AGENTS.md"
-ADR_0011 = "docs/decisions/0011-delegate-merges-under-a-guard.md"
+DECISION_RECORDS = "docs/decisions"
+GUARD_RECORD_NAME = re.compile(r"[0-9]{4}-delegate-merges-under-a-guard\.md")
 DECISIONS = "docs/maintainers/decisions.md"
 RUNBOOK = "docs/maintainers/runbook.md"
 GUARD_SCRIPT = ".github/scripts/merge_guarded.sh"
-GOVERNANCE_FILES = [CODEOWNERS, CI, RULES, ADR_0011, DECISIONS, RUNBOOK, GUARD_SCRIPT]
+GOVERNANCE_FILES = [CODEOWNERS, CI, RULES, DECISIONS, RUNBOOK, GUARD_SCRIPT]
 END_DATE = "2027-02-17"
 
 # The ruleset `protect-main` requires `ci-gate`; this set must track test.yml. If a check below fails
@@ -66,6 +68,29 @@ def check(fn):
 
 
 # --- readers -----------------------------------------------------------------------------------
+
+def resolve_guard_record(root: Path) -> str:
+    """Relative path of the unique regular file with the guarded-merge record slug."""
+    try:
+        matches = sorted(path for path in (root / DECISION_RECORDS).iterdir()
+                         if GUARD_RECORD_NAME.fullmatch(path.name))
+    except OSError as exc:
+        raise GovernanceError(f"{DECISION_RECORDS} cannot be read: {exc}") from exc
+    if not matches:
+        raise GovernanceError(f"{DECISION_RECORDS} has no guarded-merge decision record")
+    if len(matches) > 1:
+        paths = ", ".join(path.relative_to(root).as_posix() for path in matches)
+        raise GovernanceError(f"multiple guarded-merge decision records: {paths}")
+    (path,) = matches
+    rel = path.relative_to(root).as_posix()
+    try:
+        mode = path.lstat().st_mode
+    except OSError as exc:
+        raise GovernanceError(f"{rel} cannot be inspected: {exc}") from exc
+    if not stat.S_ISREG(mode):
+        raise GovernanceError(f"{rel} is not a regular file")
+    return rel
+
 
 def read(root: Path, rel: str) -> str:
     try:
@@ -257,7 +282,7 @@ def check_delegation_end_date(root: Path) -> list[str]:  # f
     guard's END_DATE constant must all state it, so no stale '90 days' or 'if merged on' can survive."""
     ends = re.compile(r"\bends\s+(?:on\s+)?(\d{4}-\d{2}-\d{2})|\bend date\s*\(?(\d{4}-\d{2}-\d{2})")
     problems = []
-    for rel in (ADR_0011, DECISIONS, RUNBOOK):
+    for rel in (resolve_guard_record(root), DECISIONS, RUNBOOK):
         text = read(root, rel)
         dates = {m.group(1) or m.group(2) for m in ends.finditer(text)}
         if END_DATE not in dates:
@@ -305,7 +330,7 @@ def test_this_file_in_a_rule_counts_for_the_rules_file():
 # --- the checks catch drift: one mutation per check, applied to a temporary copy ------------------
 
 def copy_governance_files(dest: Path) -> Path:
-    for rel in GOVERNANCE_FILES:
+    for rel in (*GOVERNANCE_FILES, resolve_guard_record(ROOT)):
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / rel, dest / rel)
     return dest
@@ -377,11 +402,11 @@ MUTATIONS = {
     "ci_matrix_version_changes": (
         lambda r: replace_once(r, CI, 'python-version: "3.14"', 'python-version: "3.13"'), "e_ci_job_names"),
     "delegation_end_date_moves": (
-        lambda r: replace_once(r, ADR_0011, END_DATE, "2027-02-16"), "f_delegation_end_date"),
+        lambda r: replace_once(r, resolve_guard_record(r), END_DATE, "2027-02-16"), "f_delegation_end_date"),
     "delegation_end_date_moves_in_decisions": (
         lambda r: replace_once(r, DECISIONS, END_DATE, "2027-02-16"), "f_delegation_end_date"),
     "delegation_end_date_removed_from_adr": (
-        lambda r: drop_the_end_date(r, ADR_0011), "f_delegation_end_date"),
+        lambda r: drop_the_end_date(r, resolve_guard_record(r)), "f_delegation_end_date"),
     "delegation_end_date_removed_from_decisions": (
         lambda r: drop_the_end_date(r, DECISIONS), "f_delegation_end_date"),
     "delegation_end_date_moves_in_script": (
@@ -409,6 +434,43 @@ def test_each_check_fails_alone_on_its_own_kind_of_drift(tmp_path, mutation):
 
 
 # --- loud failures: a file that is missing, unreadable or empty must fail, never be skipped ---------
+
+def test_the_end_date_check_reports_a_missing_guard_record(tmp_path):
+    root = copy_governance_files(tmp_path)
+    record = root / resolve_guard_record(root)
+    nested_dir = record.parent / "nested"
+    nested_dir.mkdir()
+    record.rename(nested_dir / record.name)
+    (record.parent / "００１５-delegate-merges-under-a-guard.md").touch()
+    assert check_delegation_end_date(root) == [
+        f"{FILE_PROBLEM}{DECISION_RECORDS} has no guarded-merge decision record"
+    ]
+
+
+def test_the_end_date_check_reports_ambiguous_guard_records(tmp_path):
+    root = copy_governance_files(tmp_path)
+    rel = resolve_guard_record(root)
+    other = f"{DECISION_RECORDS}/9999-delegate-merges-under-a-guard.md"
+    shutil.copyfile(root / rel, root / other)
+    paths = ", ".join(sorted((rel, other)))
+    assert check_delegation_end_date(root) == [
+        f"{FILE_PROBLEM}multiple guarded-merge decision records: {paths}"
+    ]
+
+
+@pytest.mark.parametrize("kind", ["directory", "symlink"])
+def test_the_end_date_check_reports_a_nonregular_guard_record(tmp_path, kind):
+    root = copy_governance_files(tmp_path)
+    rel = resolve_guard_record(root)
+    record = root / rel
+    if kind == "directory":
+        record.unlink()
+        record.mkdir()
+    else:
+        target = record.rename(root / "regular-file.md")
+        record.symlink_to(target)
+    assert check_delegation_end_date(root) == [f"{FILE_PROBLEM}{rel} is not a regular file"]
+
 
 def all_problems(root: Path) -> list[str]:
     return [p for fn in CHECKS.values() for p in fn(root)]
@@ -470,10 +532,22 @@ def test_rule_1_must_not_name_an_account(tmp_path):
     assert any("names the account(s)" in p for p in check_rule_1_does_not_name_accounts(root))
 
 
-@pytest.mark.parametrize("rel", [ADR_0011, DECISIONS])
-@pytest.mark.parametrize("stale", ["if merged on", "90 days", "90-day"])
-def test_the_end_date_check_refuses_stale_relative_wording(tmp_path, rel, stale):
+def test_the_end_date_check_uses_the_renumbered_guard_record(tmp_path):
     root = copy_governance_files(tmp_path)
+    renumbered = f"{DECISION_RECORDS}/0015-delegate-merges-under-a-guard.md"
+    (root / resolve_guard_record(root)).rename(root / renumbered)
+    (root / DECISION_RECORDS / "0011-require-python-3-13.md").write_text(
+        "The unrelated decision ends on 2027-02-16.\n", encoding="utf-8"
+    )
+    assert resolve_guard_record(root) == renumbered
+    assert check_delegation_end_date(root) == []
+
+
+@pytest.mark.parametrize("source", ["guard record", "maintainer decisions"])
+@pytest.mark.parametrize("stale", ["if merged on", "90 days", "90-day"])
+def test_the_end_date_check_refuses_stale_relative_wording(tmp_path, source, stale):
+    root = copy_governance_files(tmp_path)
+    rel = resolve_guard_record(root) if source == "guard record" else DECISIONS
     with (root / rel).open("a", encoding="utf-8") as fh:
         fh.write(f"\nThe delegation lasts {stale}.\n")
     assert any(stale in p for p in check_delegation_end_date(root))
