@@ -213,7 +213,8 @@ def test_roster_skills_column_follows_each_charter(full):
         cells = [c.strip() for c in row.split("|")]
         expected = ", ".join(f"[`{s}`](skills/{s}/SKILL.md)" for s in skills) or "—"
         assert cells[-2] == expected, f"{role}: {cells[-2]!r} != {expected!r}"
-        assert f"roles/{role}/skills" not in row
+        role_local_skills = "/".join(("roles", role, "skills"))
+        assert role_local_skills not in row
 
 
 def test_skills_have_one_source(full):
@@ -804,10 +805,10 @@ def test_template_update_workflow_is_weekly_and_can_only_open_an_issue():
     assert 0 < job["timeout-minutes"] <= 15
     checkout = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
     assert checkout["with"].get("persist-credentials") is False
-    assert not re.search(r"gh pr |git push|git commit|pull-requests:|pip install|pipx ", text), "the notifier opens an issue, never a PR (decision 6)"
+    assert not re.search(r"gh pr |git push|git commit|pull-requests:|pip install|pipx ", text), "the notifier may only open an update issue"
     assert "python3 tools/template_status.py --check" in text and "gh issue create" in text
     assert "gh issue list --label template-update --state open" in text, "dedupe by the label, not one issue per version"
-    assert "docs/decisions/0008" not in text, "do not link a doc a behind project may not have"
+    assert not _ADR_CITATION.search(text), "do not cite a numbered decision record a behind project may lack"
     assert "github.event" not in text, "no event data reaches the shell"
     assert ".github/workflows/template-update.yml" in json.loads(
         (TEMPLATE / "template" / "tools" / "modules.json").read_text(encoding="utf-8"))["modules"]["github"]["paths"]
@@ -992,7 +993,7 @@ def test_shipped_issue_forms_and_release_notes_belong_to_the_github_module_and_s
     assert not (lean / ".github").exists(), "cutting the github module removes the forms and release.yml too"
 
 
-# --- the template ships no decision records (ADR 0010) ------------------------------------------------------------
+# --- the template ships no decision records -----------------------------------------------------------------------
 
 _ADR_CITATION = re.compile(r"\bADR[- ]?0\d{3}\b|decisions/\d{4}")
 _ADR_CITATION_ALLOWED = {
